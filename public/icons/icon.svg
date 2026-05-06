@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Lang Learn icon">
+  <rect width="512" height="512" rx="112" fill="#315cfd"/>
+  <path d="M116 154c0-24.3 19.7-44 44-44h168c37.6 0 68 30.4 68 68v156c0 15.5-12.5 28-28 28H180c-35.3 0-64-28.7-64-64V154Z" fill="#ffffff" opacity=".96"/>
+  <path d="M174 174h122M174 226h164M174 278h112" stroke="#315cfd" stroke-width="30" stroke-linecap="round"/>
+  <path d="M376 204v106l52 33V171l-52 33Z" fill="#ffcf33"/>
+</svg>
