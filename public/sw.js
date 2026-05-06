@@ -1,5 +1,15 @@
-const CACHE_NAME = "lang-learn-shell-v1";
-const APP_SHELL = ["/", "/manifest.webmanifest", "/icons/icon.svg"];
+const CACHE_NAME = "lang-learn-shell-v2";
+const APP_SCOPE = self.registration.scope;
+const APP_SHELL = [
+  "./",
+  "./manifest.webmanifest",
+  "./icons/icon.svg",
+  "./styles.css",
+  "./main.js",
+  "./data/languages.js",
+  "./data/storage.js",
+].map((path) => new URL(path, APP_SCOPE).toString());
+const FALLBACK_URL = new URL("./", APP_SCOPE).toString();
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -44,7 +54,7 @@ self.addEventListener("fetch", (event) => {
             .then((cache) => cache.put(event.request, responseCopy));
           return response;
         })
-        .catch(() => caches.match("/"));
+        .catch(() => caches.match(FALLBACK_URL));
     }),
   );
 });

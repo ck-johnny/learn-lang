@@ -1,4 +1,4 @@
-import { DEFAULT_LANGUAGE } from "./languages";
+import { DEFAULT_LANGUAGE } from "./languages.js";
 
 const STORAGE_KEY = "lang-learn-settings";
 
