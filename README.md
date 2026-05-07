@@ -26,6 +26,12 @@ This project has no runtime package dependencies. It compiles the TypeScript sou
 npm run build
 ```
 
+## Deploy to GitHub Pages
+
+This repository must be deployed from the generated `dist/` directory, not directly from the repository root. The root source tree does not contain the compiled `main.js`, copied `styles.css`, or copied PWA manifest that browsers request in production.
+
+The included GitHub Actions workflow builds the app on every push to `main` and publishes `dist/` to GitHub Pages. In the repository settings, set **Pages > Build and deployment > Source** to **GitHub Actions**.
+
 ## Preview locally
 
 ```sh
