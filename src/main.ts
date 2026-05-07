@@ -10,7 +10,7 @@ import {
   type PersistedSettings,
 } from "./data/storage.js";
 
-type AppScreen = "input" | "reading" | "settings" | "cheat-sheet";
+type AppScreen = "input" | "reading" | "settings" | "cheat-sheet" | "help";
 
 type ReadingLine = {
   id: string;
@@ -22,6 +22,7 @@ type CheatSheetItem = {
   translation: string;
   note?: string;
   speechText?: string;
+  kind?: "letter";
 };
 
 type CheatSheetSection = {
@@ -99,6 +100,7 @@ const CHEAT_SHEET_SECTIONS: CheatSheetSection[] = [
       translation: speechText,
       note: "letter",
       speechText,
+      kind: "letter",
     })),
   },
   {
@@ -152,6 +154,10 @@ const CHEAT_SHEET_SECTIONS: CheatSheetSection[] = [
 let settings: PersistedSettings = loadSettings();
 let screen: AppScreen = "input";
 let isSpeedDialogOpen = false;
+let isTopBarOpen = false;
+let speechDelayId: number | null = null;
+let editingLineId: string | null = null;
+let draggedLineId: string | null = null;
 const expandedLineIds = new Set<string>();
 const translationCache = new Map<string, TranslationState>();
 const speechState: SpeechState = {
@@ -189,6 +195,53 @@ function paragraphToLines(paragraph: string): ReadingLine[] {
     .map((text, index) => ({ id: `${index}-${text}`, text }));
 }
 
+function persistLines(lines: ReadingLine[]): void {
+  updateSettings({
+    ...settings,
+    paragraph: lines.map((line) => line.text).join("\n"),
+  });
+}
+
+function updateLineText(lineId: string, text: string): void {
+  const nextText = text.trim();
+  const lines = paragraphToLines(settings.paragraph)
+    .map((line) => (line.id === lineId ? { ...line, text: nextText } : line))
+    .filter((line) => line.text);
+  editingLineId = null;
+  persistLines(lines);
+}
+
+function appendLine(text: string): void {
+  const nextText = text.trim();
+
+  if (!nextText) {
+    return;
+  }
+
+  persistLines([
+    ...paragraphToLines(settings.paragraph),
+    { id: `new-${Date.now()}`, text: nextText },
+  ]);
+}
+
+function reorderLines(sourceId: string, targetId: string): void {
+  if (sourceId === targetId) {
+    return;
+  }
+
+  const lines = paragraphToLines(settings.paragraph);
+  const sourceIndex = lines.findIndex((line) => line.id === sourceId);
+  const targetIndex = lines.findIndex((line) => line.id === targetId);
+
+  if (sourceIndex === -1 || targetIndex === -1) {
+    return;
+  }
+
+  const [sourceLine] = lines.splice(sourceIndex, 1);
+  lines.splice(targetIndex, 0, sourceLine);
+  persistLines(lines);
+}
+
 function createElement<K extends keyof HTMLElementTagNameMap>(
   tagName: K,
   options: {
@@ -219,6 +272,11 @@ function stopSpeech(): void {
     return;
   }
 
+  if (speechDelayId !== null) {
+    window.clearTimeout(speechDelayId);
+    speechDelayId = null;
+  }
+
   window.speechSynthesis.cancel();
   speechState.speakingId = null;
   render();
@@ -244,9 +302,19 @@ function findVoice(
   );
 }
 
-function speakText(text: string, id: string, language: LearningLanguage): void {
+function speakText(
+  text: string,
+  id: string,
+  language: LearningLanguage,
+  rateOverride?: number,
+): void {
   if (speechState.supportStatus === "unsupported" || !text.trim()) {
     return;
+  }
+
+  if (speechDelayId !== null) {
+    window.clearTimeout(speechDelayId);
+    speechDelayId = null;
   }
 
   if (speechState.voices.length === 0) {
@@ -263,7 +331,7 @@ function speakText(text: string, id: string, language: LearningLanguage): void {
 
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = language.speechLang;
-  utterance.rate = settings.speed;
+  utterance.rate = rateOverride ?? settings.speed;
   utterance.voice = voice ?? null;
   utterance.onstart = () => {
     speechState.speakingId = id;
@@ -280,6 +348,86 @@ function speakText(text: string, id: string, language: LearningLanguage): void {
   speechState.speakingId = id;
   window.speechSynthesis.speak(utterance);
   render();
+}
+
+function speakTextRepeated(
+  text: string,
+  id: string,
+  language: LearningLanguage,
+): void {
+  if (speechState.supportStatus === "unsupported" || !text.trim()) {
+    return;
+  }
+
+  if (speechDelayId !== null) {
+    window.clearTimeout(speechDelayId);
+    speechDelayId = null;
+  }
+
+  if (speechState.voices.length === 0) {
+    speechState.voices = window.speechSynthesis.getVoices();
+  }
+
+  const voice = findVoice(language);
+  if (speechState.voices.length > 0 && !voice) {
+    render();
+    return;
+  }
+
+  window.speechSynthesis.cancel();
+  speechState.speakingId = id;
+
+  const queue = [text, text, text];
+  const speakNext = (): void => {
+    const nextText = queue.shift();
+
+    if (!nextText || speechState.speakingId !== id) {
+      speechState.speakingId = null;
+      render();
+      return;
+    }
+
+    const utterance = new SpeechSynthesisUtterance(nextText);
+    utterance.lang = language.speechLang;
+    utterance.rate = 0.55;
+    utterance.voice = voice ?? null;
+    utterance.onend = () => {
+      speechDelayId = window.setTimeout(speakNext, 420);
+    };
+    utterance.onerror = () => {
+      speechState.speakingId = null;
+      render();
+    };
+    window.speechSynthesis.speak(utterance);
+    render();
+  };
+
+  speakNext();
+}
+
+function speakCheatSheetItem(
+  item: CheatSheetItem,
+  id: string,
+  language: LearningLanguage,
+): void {
+  const text = item.speechText ?? item.text;
+
+  if (item.kind !== "letter") {
+    speakText(text, id, language);
+    return;
+  }
+
+  if (settings.letterPlaybackMode === "repeat") {
+    speakTextRepeated(text, id, language);
+    return;
+  }
+
+  if (settings.letterPlaybackMode === "extra-slow") {
+    speakText(text, id, language, 0.35);
+    return;
+  }
+
+  speakText(`${text}...`, id, language, Math.min(settings.speed, 0.65));
 }
 
 function speakLine(line: ReadingLine, language: LearningLanguage): void {
@@ -372,67 +520,14 @@ function getTtsMessage(language: LearningLanguage): string | null {
 }
 
 function renderInputScreen(language: LearningLanguage): HTMLElement {
-  const main = createElement("main", { className: "screen input-screen" });
-  const topBar = createElement("header", { className: "top-bar" });
-  const topActions = createElement("div", { className: "top-actions" });
-  topActions.append(renderSettingsNavButton());
-  topBar.append(
-    createElement("strong", { className: "app-title", text: "Lang Learn" }),
-    topActions,
-  );
+  return renderSentenceListScreen(language, paragraphToLines(settings.paragraph));
+}
 
-  const panel = createElement("section", {
-    className: "panel",
-    attributes: { "aria-label": "Paragraph editor" },
-  });
-  const paragraphLabel = createElement("label", {
-    className: "field-label",
-    text: "Paragraph",
-  });
-  const textarea = createElement("textarea", {
-    className: "paragraph-input",
-    attributes: {
-      id: "paragraph-input",
-      placeholder: language.placeholder,
-      rows: "10",
-    },
-  });
-  textarea.value = settings.paragraph;
-  textarea.addEventListener("input", () => {
-    updateSettings({ ...settings, paragraph: textarea.value }, false);
-    const currentLines = paragraphToLines(textarea.value);
-    lineCountElement.textContent =
-      currentLines.length === 0
-        ? "No reading lines yet"
-        : `${currentLines.length} reading ${currentLines.length === 1 ? "line" : "lines"}`;
-    startButton.disabled = currentLines.length === 0;
-  });
-  paragraphLabel.append(textarea);
-
-  const lines = paragraphToLines(settings.paragraph);
-  const actions = createElement("div", { className: "input-actions" });
-  const lineCountElement = createElement("p", {
-    className: "line-count",
-    text:
-      lines.length === 0
-        ? "No reading lines yet"
-        : `${lines.length} reading ${lines.length === 1 ? "line" : "lines"}`,
-  });
-  const startButton = createElement("button", {
-    className: "primary-button",
-    text: "Start reading",
-  });
-  startButton.type = "button";
-  startButton.disabled = lines.length === 0;
-  startButton.addEventListener("click", () => {
-    screen = "reading";
-    render();
-  });
-  actions.append(lineCountElement, startButton);
-
-  panel.append(paragraphLabel, actions);
-  main.append(topBar, panel);
-  return main;
+function goToScreen(nextScreen: AppScreen): void {
+  stopSpeech();
+  screen = nextScreen;
+  isTopBarOpen = false;
+  render();
 }
 
 function renderCheatSheetNavButton(): HTMLButtonElement {
@@ -442,11 +537,7 @@ function renderCheatSheetNavButton(): HTMLButtonElement {
     attributes: { "aria-label": "Open cheat sheet" },
   });
   button.type = "button";
-  button.addEventListener("click", () => {
-    stopSpeech();
-    screen = "cheat-sheet";
-    render();
-  });
+  button.addEventListener("click", () => goToScreen("cheat-sheet"));
   return button;
 }
 
@@ -457,11 +548,7 @@ function renderSettingsNavButton(): HTMLButtonElement {
     attributes: { "aria-label": "Open settings" },
   });
   button.type = "button";
-  button.addEventListener("click", () => {
-    stopSpeech();
-    screen = "settings";
-    render();
-  });
+  button.addEventListener("click", () => goToScreen("settings"));
   return button;
 }
 
@@ -469,35 +556,14 @@ function renderReadingScreen(
   language: LearningLanguage,
   lines: ReadingLine[],
 ): HTMLElement {
+  return renderSentenceListScreen(language, lines);
+}
+
+function renderSentenceListScreen(
+  language: LearningLanguage,
+  lines: ReadingLine[],
+): HTMLElement {
   const main = createElement("main", { className: "screen reading-screen" });
-  const header = createElement("header", { className: "reading-header" });
-  const editButton = createElement("button", {
-    className: "secondary-button",
-    text: "Edit",
-  });
-  editButton.type = "button";
-  editButton.addEventListener("click", () => {
-    stopSpeech();
-    screen = "input";
-    render();
-  });
-
-  const titleGroup = createElement("div");
-  titleGroup.append(
-    createElement("p", { className: "eyebrow", text: language.label }),
-    createElement("h1", { text: "Tap a line" }),
-  );
-
-  const stopButton = createElement("button", {
-    className: "secondary-button",
-    text: "Stop",
-  });
-  stopButton.type = "button";
-  stopButton.disabled = !speechState.speakingId;
-  stopButton.addEventListener("click", stopSpeech);
-  header.append(editButton, titleGroup, stopButton, renderSettingsNavButton());
-  main.append(header);
-
   const ttsMessage = getTtsMessage(language);
   if (ttsMessage) {
     main.append(
@@ -514,25 +580,52 @@ function renderReadingScreen(
     const isExpanded = expandedLineIds.has(line.id);
     const lineCard = createElement("article", {
       className: `line-card ${isExpanded ? "expanded" : ""}`,
+      attributes: { draggable: editingLineId === line.id ? "false" : "true" },
+    });
+    lineCard.style.setProperty("--row-accent", getRowAccent(index));
+    lineCard.addEventListener("dragstart", (event) => {
+      draggedLineId = line.id;
+      event.dataTransfer?.setData("text/plain", line.id);
+      lineCard.classList.add("dragging");
+    });
+    lineCard.addEventListener("dragend", () => {
+      draggedLineId = null;
+      lineCard.classList.remove("dragging");
+    });
+    lineCard.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      lineCard.classList.add("drag-over");
+    });
+    lineCard.addEventListener("dragleave", () => {
+      lineCard.classList.remove("drag-over");
+    });
+    lineCard.addEventListener("drop", (event) => {
+      event.preventDefault();
+      lineCard.classList.remove("drag-over");
+      const sourceId = event.dataTransfer?.getData("text/plain") || draggedLineId;
+      if (sourceId) {
+        reorderLines(sourceId, line.id);
+      }
     });
     const lineActions = createElement("div", { className: "line-actions" });
-    const lineButton = createElement("button", {
-      className: `reading-line ${isSpeaking ? "speaking" : ""}`,
-      attributes: { "aria-pressed": String(isSpeaking) },
+    const editLineButton = createElement("button", {
+      className: "line-edit-button",
+      text: "✎",
+      attributes: {
+        "aria-label": `Edit paragraph from line ${index + 1}`,
+        title: "Edit text",
+      },
     });
-    lineButton.type = "button";
-    lineButton.append(
-      createElement("span", {
-        className: "line-number",
-        text: String(index + 1),
-      }),
-      createElement("span", { className: "line-text", text: line.text }),
-      createElement("span", {
-        className: "speak-indicator",
-        text: isSpeaking ? "Speaking" : "Tap",
-      }),
-    );
-    lineButton.addEventListener("click", () => speakLine(line, language));
+    editLineButton.type = "button";
+    editLineButton.addEventListener("click", () => {
+      editingLineId = line.id;
+      render();
+    });
+
+    const lineBody =
+      editingLineId === line.id
+        ? renderLineEditInput(line)
+        : renderPlayableLine(line, language, isSpeaking);
     const expandButton = createElement("button", {
       className: "expand-button",
       text: isExpanded ? "−" : "+",
@@ -552,7 +645,7 @@ function renderReadingScreen(
       render();
     });
 
-    lineActions.append(lineButton, expandButton);
+    lineActions.append(editLineButton, lineBody, expandButton);
     lineCard.append(lineActions);
 
     if (isExpanded) {
@@ -561,8 +654,111 @@ function renderReadingScreen(
 
     lineList.append(lineCard);
   });
+  lineList.append(renderAddLineForm(language));
   main.append(lineList);
 
+  return main;
+}
+
+function getRowAccent(index: number): string {
+  const colors = ["#315cfd", "#0f9f8f", "#cf6d17", "#8f56d9", "#d83f87", "#2878a8", "#6d8d18"];
+  return colors[index % colors.length];
+}
+
+function renderPlayableLine(
+  line: ReadingLine,
+  language: LearningLanguage,
+  isSpeaking: boolean,
+): HTMLButtonElement {
+  const lineButton = createElement("button", {
+    className: `reading-line ${isSpeaking ? "speaking" : ""}`,
+    attributes: { "aria-pressed": String(isSpeaking) },
+  });
+  lineButton.type = "button";
+  lineButton.append(
+    createElement("span", { className: "play-icon", text: "▶" }),
+    createElement("span", { className: "line-text", text: line.text }),
+  );
+  lineButton.addEventListener("click", () => speakLine(line, language));
+  return lineButton;
+}
+
+function renderLineEditInput(line: ReadingLine): HTMLInputElement {
+  const input = createElement("input", {
+    className: "line-edit-input",
+    attributes: {
+      "aria-label": "Edit sentence",
+      value: line.text,
+    },
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      updateLineText(line.id, input.value);
+    }
+
+    if (event.key === "Escape") {
+      editingLineId = null;
+      render();
+    }
+  });
+  input.addEventListener("blur", () => updateLineText(line.id, input.value));
+  window.setTimeout(() => input.focus(), 0);
+  return input;
+}
+
+function renderAddLineForm(language: LearningLanguage): HTMLElement {
+  const form = createElement("form", { className: "add-line-form" });
+  const input = createElement("input", {
+    className: "add-line-input",
+    attributes: {
+      "aria-label": "Add sentence",
+      placeholder: language.placeholder.split("\n")[0] ?? "Add a sentence",
+    },
+  });
+  const button = createElement("button", {
+    className: "primary-button add-line-button",
+    text: "+",
+    attributes: { "aria-label": "Add sentence" },
+  });
+  button.type = "submit";
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    appendLine(input.value);
+    input.value = "";
+  });
+  form.append(input, button);
+  return form;
+}
+
+function renderHelpScreen(): HTMLElement {
+  const main = createElement("main", { className: "screen help-screen" });
+  const sections = createElement("section", {
+    className: "feature-guide",
+    attributes: { "aria-label": "Feature guide" },
+  });
+
+  [
+    ["▶", "Play a line", "Tap the blue row to read the full sentence aloud."],
+    ["✎", "Edit row", "Use the pencil to edit only that sentence in place."],
+    ["+", "Expand", "Open translation, word playback, and grammar notes for a sentence."],
+    ["＋", "Add row", "Use the input at the end of the list to add a new sentence."],
+    ["↕", "Reorder", "Drag a sentence row to rearrange your reading order."],
+    ["Cheat", "Cheat sheet", "Open weekdays, alphabet, numbers, pronouns, and common phrases."],
+    ["Speed", "Playback speed", "Adjust speech speed from 0.5x to 2x."],
+    ["ABC", "Letter modes", "Test phonetic pause, extra slow, or repeat mode from Settings."],
+    ["⚙", "Settings", "Change reading language and dark mode."],
+    ["Stop", "Stop speech", "Stop any current line, word, or cheat sheet playback."],
+  ].forEach(([indicator, title, body]) => {
+    const card = createElement("article", { className: "feature-card" });
+    card.append(
+      createElement("span", { className: "feature-indicator", text: indicator }),
+      createElement("strong", { text: title }),
+      createElement("p", { text: body }),
+    );
+    sections.append(card);
+  });
+
+  main.append(sections);
   return main;
 }
 
@@ -711,7 +907,39 @@ function renderSettingsScreen(language: LearningLanguage): HTMLElement {
   });
   themeRow.append(themeText, themeToggle);
 
-  panel.append(languageLabel, themeRow);
+  const letterModeLabel = createElement("label", {
+    className: "field-label",
+    text: "ABC playback",
+  });
+  const letterModeSelect = createElement("select", {
+    className: "select",
+    attributes: { id: "letter-playback-mode" },
+  });
+  [
+    ["spaced", "Phonetic + pause"],
+    ["extra-slow", "Extra slow"],
+    ["repeat", "Repeat 3 times"],
+  ].forEach(([value, label]) => {
+    const option = createElement("option", {
+      text: label,
+      attributes: { value },
+    });
+    option.selected = settings.letterPlaybackMode === value;
+    letterModeSelect.append(option);
+  });
+  letterModeSelect.addEventListener("change", () => {
+    updateSettings({
+      ...settings,
+      letterPlaybackMode:
+        letterModeSelect.value === "extra-slow" ||
+        letterModeSelect.value === "repeat"
+          ? letterModeSelect.value
+          : "spaced",
+    });
+  });
+  letterModeLabel.append(letterModeSelect);
+
+  panel.append(languageLabel, letterModeLabel, themeRow);
   main.append(header, panel);
   return main;
 }
@@ -752,7 +980,7 @@ function renderCheatSheetScreen(language: LearningLanguage): HTMLElement {
       });
       itemButton.type = "button";
       itemButton.addEventListener("click", () =>
-        speakText(item.speechText ?? item.text, itemId, language),
+        speakCheatSheetItem(item, itemId, language),
       );
       itemButton.append(
         createElement("strong", { text: item.text }),
@@ -787,11 +1015,74 @@ function renderSpeedButton(): HTMLButtonElement {
 }
 
 function renderGlobalControls(): HTMLElement {
-  const controls = createElement("nav", {
-    className: "global-controls",
-    attributes: { "aria-label": "Global app controls" },
+  const controls = createElement("header", {
+    className: `global-controls ${isTopBarOpen ? "open" : ""}`,
   });
-  controls.append(renderCheatSheetNavButton(), renderSpeedButton());
+  const primaryRow = createElement("div", { className: "global-row" });
+  const menuButton = createElement("button", {
+    className: "icon-button menu-button",
+    text: isTopBarOpen ? "×" : "☰",
+    attributes: {
+      "aria-expanded": String(isTopBarOpen),
+      "aria-label": isTopBarOpen ? "Collapse controls" : "Expand controls",
+    },
+  });
+  menuButton.type = "button";
+  menuButton.addEventListener("click", () => {
+    isTopBarOpen = !isTopBarOpen;
+    render();
+  });
+  primaryRow.append(
+    createElement("strong", { className: "app-title", text: "Lang Learn" }),
+    menuButton,
+  );
+  controls.append(primaryRow);
+
+  if (isTopBarOpen) {
+    const actionRow = createElement("nav", {
+      className: "global-actions",
+      attributes: { "aria-label": "Global app controls" },
+    });
+    const homeButton = createElement("button", {
+      className: "secondary-button compact-button",
+      text: "Home",
+    });
+    homeButton.type = "button";
+    homeButton.addEventListener("click", () => goToScreen("input"));
+
+    const helpButton = createElement("button", {
+      className: "secondary-button compact-button",
+      text: "Help",
+      attributes: { "aria-label": "Open help" },
+    });
+    helpButton.type = "button";
+    helpButton.addEventListener("click", () => goToScreen("help"));
+
+    actionRow.append(
+      homeButton,
+      renderCheatSheetNavButton(),
+      helpButton,
+      renderSettingsNavButton(),
+    );
+    controls.append(actionRow);
+  }
+
+  return controls;
+}
+
+function renderBottomPlaybackControls(): HTMLElement {
+  const controls = createElement("nav", {
+    className: "bottom-playback-controls",
+    attributes: { "aria-label": "Playback controls" },
+  });
+  const stopButton = createElement("button", {
+    className: "secondary-button compact-button",
+    text: "Stop",
+  });
+  stopButton.type = "button";
+  stopButton.disabled = !speechState.speakingId;
+  stopButton.addEventListener("click", stopSpeech);
+  controls.append(stopButton, renderSpeedButton());
   return controls;
 }
 
@@ -883,6 +1174,8 @@ function render(): void {
       ? renderSettingsScreen(language)
       : screen === "cheat-sheet"
         ? renderCheatSheetScreen(language)
+      : screen === "help"
+        ? renderHelpScreen()
       : screen === "input"
         ? renderInputScreen(language)
         : renderReadingScreen(language, lines),
@@ -894,6 +1187,7 @@ function render(): void {
   }
 
   appRoot.append(renderGlobalControls());
+  appRoot.append(renderBottomPlaybackControls());
 }
 
 function loadVoices(): void {
