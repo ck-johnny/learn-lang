@@ -1,5 +1,6 @@
 dist/*
 !dist/.gitkeep
+!dist/placeholder.txt
 node_modules/
 *.tsbuildinfo
 .DS_Store
