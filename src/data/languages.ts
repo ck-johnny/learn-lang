@@ -15,6 +15,29 @@ export const SUPPORTED_LANGUAGES: LearningLanguage[] = [
     placeholder:
       "Guten Morgen!\nIch lerne Deutsch.\nHeute höre ich jeden Satz langsam an.",
   },
+  {
+    id: "en",
+    label: "English",
+    nativeLabel: "English",
+    speechLang: "en-US",
+    placeholder: "Good morning!\nI am practicing English.\nI listen to each sentence slowly.",
+  },
+  {
+    id: "fr",
+    label: "French",
+    nativeLabel: "Français",
+    speechLang: "fr-FR",
+    placeholder:
+      "Bonjour !\nJ'apprends le français.\nJ'écoute chaque phrase lentement.",
+  },
+  {
+    id: "es",
+    label: "Spanish",
+    nativeLabel: "Español",
+    speechLang: "es-ES",
+    placeholder:
+      "Buenos días.\nEstoy aprendiendo español.\nEscucho cada frase lentamente.",
+  },
 ];
 
 export const DEFAULT_LANGUAGE = SUPPORTED_LANGUAGES[0];

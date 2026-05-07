@@ -1,4 +1,4 @@
-const CACHE_NAME = "lang-learn-shell-v2";
+const CACHE_NAME = "lang-learn-shell-v6";
 const APP_SCOPE = self.registration.scope;
 const APP_SHELL = [
   "./",

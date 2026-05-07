@@ -6,12 +6,14 @@ export type PersistedSettings = {
   paragraph: string;
   speed: number;
   languageId: string;
+  theme: "light" | "dark";
 };
 
 export const DEFAULT_SETTINGS: PersistedSettings = {
   paragraph: "",
   speed: 1,
   languageId: DEFAULT_LANGUAGE.id,
+  theme: "light",
 };
 
 function isBrowserStorageAvailable(): boolean {
@@ -46,6 +48,10 @@ export function loadSettings(): PersistedSettings {
         typeof parsedSettings.languageId === "string"
           ? parsedSettings.languageId
           : DEFAULT_SETTINGS.languageId,
+      theme:
+        parsedSettings.theme === "dark" || parsedSettings.theme === "light"
+          ? parsedSettings.theme
+          : DEFAULT_SETTINGS.theme,
     };
   } catch {
     return DEFAULT_SETTINGS;
