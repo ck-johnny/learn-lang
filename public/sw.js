@@ -1,4 +1,4 @@
-const CACHE_NAME = "lang-learn-shell-v17";
+const CACHE_NAME = "lang-learn-shell-v18";
 const APP_SCOPE = self.registration.scope;
 const APP_SHELL = [
   "./",
@@ -48,6 +48,12 @@ self.addEventListener("fetch", (event) => {
 
       return fetch(event.request)
         .then((response) => {
+          const requestUrl = new URL(event.request.url);
+
+          if (!response.ok || requestUrl.origin !== self.location.origin) {
+            return response;
+          }
+
           const responseCopy = response.clone();
           caches
             .open(CACHE_NAME)

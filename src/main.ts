@@ -37,7 +37,10 @@ type TranslationState =
 
 type SpeechState = {
   supportStatus: "supported" | "unsupported";
+  voicesStatus: "loading" | "ready";
   voices: SpeechSynthesisVoice[];
+  attemptedLanguageIds: Set<string>;
+  unavailableLanguageIds: Set<string>;
   speakingId: string | null;
 };
 
@@ -155,17 +158,24 @@ const CHEAT_SHEET_SECTIONS: CheatSheetSection[] = [
 let settings: PersistedSettings = loadSettings();
 let screen: AppScreen = "input";
 let isTopBarOpen = false;
+let isSharePanelOpen = false;
 let speechDelayId: number | null = null;
 let editingLineId: string | null = null;
 let draggedLineId: string | null = null;
 let dragPreviewLines: ReadingLine[] | null = null;
+let dragPointerId: number | null = null;
+let dragTouchId: number | null = null;
+let dragPreviewHasMoved = false;
 let longPressTimerId: number | null = null;
 let isEditingAll = false;
 const expandedLineIds = new Set<string>();
 const translationCache = new Map<string, TranslationState>();
 const speechState: SpeechState = {
   supportStatus: "speechSynthesis" in window ? "supported" : "unsupported",
+  voicesStatus: "loading",
   voices: [],
+  attemptedLanguageIds: new Set(),
+  unavailableLanguageIds: new Set(),
   speakingId: null,
 };
 
@@ -186,8 +196,50 @@ function updateSettings(
   }
 }
 
+function applySharedSettingsFromUrl(): void {
+  const currentUrl = new URL(window.location.href);
+
+  if (!currentUrl.searchParams.has("text")) {
+    return;
+  }
+
+  const sharedText = currentUrl.searchParams.get("text") ?? "";
+  const sharedLanguageId = currentUrl.searchParams.get("lang");
+  const nextLanguageId = SUPPORTED_LANGUAGES.some(
+    (language) => language.id === sharedLanguageId,
+  )
+    ? sharedLanguageId
+    : settings.languageId;
+
+  settings = {
+    ...settings,
+    paragraph: sharedText,
+    languageId: nextLanguageId ?? settings.languageId,
+  };
+  saveSettings(settings);
+
+  currentUrl.searchParams.delete("text");
+  currentUrl.searchParams.delete("lang");
+  window.history.replaceState({}, "", currentUrl);
+}
+
 function applyTheme(): void {
   document.documentElement.dataset.theme = settings.theme;
+}
+
+function getShareUrl(): string {
+  const shareUrl = new URL(window.location.href);
+  shareUrl.searchParams.set("text", settings.paragraph);
+  shareUrl.searchParams.set("lang", settings.languageId);
+  return shareUrl.toString();
+}
+
+function getQrCodeUrl(data: string): string {
+  const qrUrl = new URL("https://api.qrserver.com/v1/create-qr-code/");
+  qrUrl.searchParams.set("size", "260x260");
+  qrUrl.searchParams.set("qzone", "2");
+  qrUrl.searchParams.set("data", data);
+  return qrUrl.toString();
 }
 
 function paragraphToLines(paragraph: string): ReadingLine[] {
@@ -272,23 +324,43 @@ function clearLineDragging(): void {
   clearLongPressTimer();
   draggedLineId = null;
   dragPreviewLines = null;
+  dragPointerId = null;
+  dragTouchId = null;
+  dragPreviewHasMoved = false;
   window.removeEventListener("pointermove", handleLineDragMove, true);
   window.removeEventListener("pointerup", handleLineDragEnd, true);
   window.removeEventListener("pointercancel", handleLineDragCancel, true);
+  window.removeEventListener("touchmove", handleLineTouchMove, true);
+  window.removeEventListener("touchend", handleLineTouchEnd, true);
+  window.removeEventListener("touchcancel", handleLineTouchCancel, true);
   document
     .querySelectorAll(".line-card.dragging")
     .forEach((element) => element.classList.remove("dragging"));
   document.documentElement.classList.remove("is-reordering");
 }
 
-function beginLineDrag(lineId: string, lineCard: HTMLElement): void {
+function beginLineDrag(
+  lineId: string,
+  lineCard: HTMLElement,
+  pointerId: number | null = null,
+  touchId: number | null = null,
+): void {
   draggedLineId = lineId;
   dragPreviewLines = paragraphToLines(settings.paragraph);
+  dragPointerId = pointerId;
+  dragTouchId = touchId;
+  dragPreviewHasMoved = false;
   lineCard.classList.add("dragging");
   document.documentElement.classList.add("is-reordering");
   window.addEventListener("pointermove", handleLineDragMove, true);
   window.addEventListener("pointerup", handleLineDragEnd, true);
   window.addEventListener("pointercancel", handleLineDragCancel, true);
+  window.addEventListener("touchmove", handleLineTouchMove, {
+    capture: true,
+    passive: false,
+  });
+  window.addEventListener("touchend", handleLineTouchEnd, true);
+  window.addEventListener("touchcancel", handleLineTouchCancel, true);
 }
 
 function previewLineReorder(
@@ -311,6 +383,7 @@ function previewLineReorder(
   }
 
   dragPreviewLines = nextLines;
+  dragPreviewHasMoved = true;
   render();
 }
 
@@ -361,22 +434,91 @@ function handleLineDragMove(event: PointerEvent): void {
     return;
   }
 
+  if (dragPointerId !== null && event.pointerId !== dragPointerId) {
+    return;
+  }
+
   event.preventDefault();
   updateDropTargetFromPoint(event.clientY);
 }
 
 function handleLineDragEnd(event: PointerEvent): void {
+  if (dragPointerId !== null && event.pointerId !== dragPointerId) {
+    return;
+  }
+
+  event.preventDefault();
   finishLineDrag(event.clientY);
 }
 
-function handleLineDragCancel(): void {
+function handleLineDragCancel(event?: PointerEvent): void {
+  if (
+    event &&
+    dragPointerId !== null &&
+    event.pointerId !== dragPointerId
+  ) {
+    return;
+  }
+
   clearLineDragging();
 }
 
-function startLineLongPress(lineId: string, lineCard: HTMLElement): void {
+function getTrackedTouch(touches: TouchList): Touch | null {
+  if (dragTouchId === null) {
+    return touches[0] ?? null;
+  }
+
+  for (const touch of Array.from(touches)) {
+    if (touch.identifier === dragTouchId) {
+      return touch;
+    }
+  }
+
+  return null;
+}
+
+function handleLineTouchMove(event: TouchEvent): void {
+  if (!draggedLineId) {
+    return;
+  }
+
+  const touch = getTrackedTouch(event.touches);
+  if (!touch) {
+    return;
+  }
+
+  event.preventDefault();
+  updateDropTargetFromPoint(touch.clientY);
+}
+
+function handleLineTouchEnd(event: TouchEvent): void {
+  if (!draggedLineId) {
+    return;
+  }
+
+  const touch = getTrackedTouch(event.changedTouches);
+  if (!touch) {
+    return;
+  }
+
+  event.preventDefault();
+  finishLineDrag(touch.clientY);
+}
+
+function handleLineTouchCancel(event: TouchEvent): void {
+  if (!draggedLineId || dragTouchId === null || getTrackedTouch(event.changedTouches)) {
+    clearLineDragging();
+  }
+}
+
+function startLineLongPress(
+  lineId: string,
+  lineCard: HTMLElement,
+  pointerId: number,
+): void {
   clearLongPressTimer();
   longPressTimerId = window.setTimeout(() => {
-    beginLineDrag(lineId, lineCard);
+    beginLineDrag(lineId, lineCard, pointerId);
   }, 450);
 }
 
@@ -441,6 +583,78 @@ function findVoice(
   );
 }
 
+function refreshVoices(): void {
+  if (speechState.supportStatus === "unsupported") {
+    return;
+  }
+
+  speechState.voices = window.speechSynthesis.getVoices();
+
+  if (speechState.voices.length > 0) {
+    speechState.voicesStatus = "ready";
+    SUPPORTED_LANGUAGES.forEach((language) => {
+      if (findVoice(language)) {
+        speechState.unavailableLanguageIds.delete(language.id);
+      }
+    });
+  }
+}
+
+function userLanguagesInclude(language: LearningLanguage): boolean {
+  const speechLang = language.speechLang.toLowerCase();
+  const languagePrefix = speechLang.split("-")[0];
+  const browserLanguages = navigator.languages?.length
+    ? navigator.languages
+    : [navigator.language].filter(Boolean);
+
+  return browserLanguages.some((browserLanguage) => {
+    const normalizedLanguage = browserLanguage.toLowerCase();
+    return (
+      normalizedLanguage === speechLang ||
+      normalizedLanguage === languagePrefix ||
+      normalizedLanguage.startsWith(`${languagePrefix}-`)
+    );
+  });
+}
+
+function markLanguageVoiceUnavailable(language: LearningLanguage): void {
+  speechState.attemptedLanguageIds.add(language.id);
+  speechState.unavailableLanguageIds.add(language.id);
+}
+
+function isVoiceUnavailableError(error: SpeechSynthesisErrorCode): boolean {
+  return [
+    "language-unavailable",
+    "voice-unavailable",
+    "synthesis-unavailable",
+    "synthesis-failed",
+  ].includes(error);
+}
+
+function prepareVoiceForPlayback(
+  language: LearningLanguage,
+): SpeechSynthesisVoice | null | undefined {
+  speechState.attemptedLanguageIds.add(language.id);
+  refreshVoices();
+
+  const voice = findVoice(language);
+  if (voice) {
+    speechState.unavailableLanguageIds.delete(language.id);
+    return voice;
+  }
+
+  if (userLanguagesInclude(language)) {
+    return null;
+  }
+
+  if (speechState.voicesStatus === "ready") {
+    markLanguageVoiceUnavailable(language);
+    return undefined;
+  }
+
+  return null;
+}
+
 function speakText(
   text: string,
   id: string,
@@ -456,12 +670,8 @@ function speakText(
     speechDelayId = null;
   }
 
-  if (speechState.voices.length === 0) {
-    speechState.voices = window.speechSynthesis.getVoices();
-  }
-
-  const voice = findVoice(language);
-  if (speechState.voices.length > 0 && !voice) {
+  const voice = prepareVoiceForPlayback(language);
+  if (voice === undefined) {
     render();
     return;
   }
@@ -482,7 +692,15 @@ function speakText(
       render();
     }
   };
-  utterance.onerror = utterance.onend;
+  utterance.onerror = (event) => {
+    if (isVoiceUnavailableError(event.error)) {
+      markLanguageVoiceUnavailable(language);
+    }
+    if (speechState.speakingId === id) {
+      speechState.speakingId = null;
+      render();
+    }
+  };
 
   speechState.speakingId = id;
   window.speechSynthesis.speak(utterance);
@@ -503,12 +721,8 @@ function speakTextRepeated(
     speechDelayId = null;
   }
 
-  if (speechState.voices.length === 0) {
-    speechState.voices = window.speechSynthesis.getVoices();
-  }
-
-  const voice = findVoice(language);
-  if (speechState.voices.length > 0 && !voice) {
+  const voice = prepareVoiceForPlayback(language);
+  if (voice === undefined) {
     render();
     return;
   }
@@ -533,7 +747,10 @@ function speakTextRepeated(
     utterance.onend = () => {
       speechDelayId = window.setTimeout(speakNext, 420);
     };
-    utterance.onerror = () => {
+    utterance.onerror = (event) => {
+      if (isVoiceUnavailableError(event.error)) {
+        markLanguageVoiceUnavailable(language);
+      }
       speechState.speakingId = null;
       render();
     };
@@ -647,12 +864,16 @@ function getTtsMessage(language: LearningLanguage): string | null {
     return "Text-to-speech is not supported in this browser. Try Chrome, Edge, or Safari with system voices enabled.";
   }
 
-  if (speechState.voices.length === 0) {
+  if (!speechState.attemptedLanguageIds.has(language.id)) {
     return null;
   }
 
-  if (!findVoice(language)) {
+  if (speechState.unavailableLanguageIds.has(language.id)) {
     return `No ${language.label} voice was found. Install or enable a ${language.label} voice in your browser or system settings before playing lines.`;
+  }
+
+  if (userLanguagesInclude(language) && speechState.voicesStatus === "loading") {
+    return null;
   }
 
   return null;
@@ -666,6 +887,7 @@ function goToScreen(nextScreen: AppScreen): void {
   stopSpeech();
   screen = nextScreen;
   isTopBarOpen = false;
+  isSharePanelOpen = false;
   render();
 }
 
@@ -713,7 +935,7 @@ function renderSentenceListScreen(
   }
 
   const lineList = createElement("section", {
-    className: "line-list",
+    className: `line-list ${dragPreviewHasMoved ? "reorder-preview" : ""}`,
     attributes: { "aria-label": "Reading lines" },
   });
   if (isEditingAll) {
@@ -724,9 +946,10 @@ function renderSentenceListScreen(
   lines.forEach((line, index) => {
     const isSpeaking = speechState.speakingId === line.id;
     const isExpanded = expandedLineIds.has(line.id);
+    const isDraggedLine = draggedLineId === line.id;
     const lineCard = createElement("article", {
       className: `line-card ${isExpanded ? "expanded" : ""} ${
-        draggedLineId === line.id ? "dragging" : ""
+        isDraggedLine ? "dragging" : ""
       }`,
       attributes: { "data-line-id": line.id },
     });
@@ -741,15 +964,17 @@ function renderSentenceListScreen(
       }
 
       clearLongPressTimer();
-      startLineLongPress(line.id, lineCard);
+      startLineLongPress(line.id, lineCard, event.pointerId);
     });
     lineCard.addEventListener("pointerup", (event) => {
+      if (dragPointerId !== null && event.pointerId !== dragPointerId) {
+        return;
+      }
+
       clearLongPressTimer();
       finishLineDrag(event.clientY);
     });
-    lineCard.addEventListener("pointercancel", () => {
-      clearLineDragging();
-    });
+    lineCard.addEventListener("pointercancel", handleLineDragCancel);
     const lineActions = createElement("div", { className: "line-actions" });
     const reorderLineButton = createElement("button", {
       className: "line-reorder-button",
@@ -763,11 +988,25 @@ function renderSentenceListScreen(
     reorderLineButton.addEventListener("pointerdown", (event) => {
       event.preventDefault();
       reorderLineButton.setPointerCapture(event.pointerId);
-      beginLineDrag(line.id, lineCard);
+      beginLineDrag(line.id, lineCard, event.pointerId);
       event.stopPropagation();
     });
+    reorderLineButton.addEventListener(
+      "touchstart",
+      (event) => {
+        const touch = event.changedTouches[0];
+        if (!touch) {
+          return;
+        }
+
+        event.preventDefault();
+        beginLineDrag(line.id, lineCard, null, touch.identifier);
+        event.stopPropagation();
+      },
+      { passive: false },
+    );
     reorderLineButton.addEventListener("pointerup", clearLongPressTimer);
-    reorderLineButton.addEventListener("pointercancel", clearLineDragging);
+    reorderLineButton.addEventListener("pointercancel", handleLineDragCancel);
 
     const lineBody =
       editingLineId === line.id
@@ -928,6 +1167,7 @@ function renderHelpScreen(): HTMLElement {
     ["↕", "Reorder", "Drag the reorder handle, then release on the destination line."],
     ["Cheat", "Cheat sheet", "Open weekdays, alphabet, numbers, pronouns, and common phrases."],
     ["Speed", "Playback speed", "Adjust speech speed from 0.5x to 2x."],
+    ["QR", "Share text", "Open the QR panel so another user can scan your current text."],
     ["ABC", "Letter modes", "Test phonetic pause, extra slow, or repeat mode from Settings."],
     ["⚙", "Settings", "Change reading language and dark mode."],
     ["Stop", "Stop speech", "Stop any current line, word, or cheat sheet playback."],
@@ -1227,9 +1467,23 @@ function renderGlobalControls(): HTMLElement {
     helpButton.type = "button";
     helpButton.addEventListener("click", () => goToScreen("help"));
 
+    const shareButton = createElement("button", {
+      className: "secondary-button compact-button",
+      text: "QR",
+      attributes: { "aria-label": "Share current text with QR code" },
+    });
+    shareButton.type = "button";
+    shareButton.disabled = !settings.paragraph.trim();
+    shareButton.addEventListener("click", () => {
+      isSharePanelOpen = true;
+      isTopBarOpen = false;
+      render();
+    });
+
     actionRow.append(
       homeButton,
       renderCheatSheetNavButton(),
+      shareButton,
       helpButton,
       renderSettingsNavButton(),
     );
@@ -1237,6 +1491,126 @@ function renderGlobalControls(): HTMLElement {
   }
 
   return controls;
+}
+
+function renderSharePanel(): HTMLElement {
+  const backdrop = createElement("div", {
+    className: "share-backdrop",
+    attributes: { role: "presentation" },
+  });
+  const panel = createElement("section", {
+    className: "share-panel",
+    attributes: {
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-label": "Share current text",
+    },
+  });
+  const header = createElement("header", { className: "dialog-header" });
+  const titleBlock = createElement("div");
+  titleBlock.append(
+    createElement("p", { className: "eyebrow", text: "Share" }),
+    createElement("h2", { text: "Scan this text" }),
+  );
+  const closeButton = createElement("button", {
+    className: "icon-button",
+    text: "×",
+    attributes: { "aria-label": "Close share panel" },
+  });
+  closeButton.type = "button";
+  closeButton.addEventListener("click", () => {
+    isSharePanelOpen = false;
+    render();
+  });
+  header.append(titleBlock, closeButton);
+
+  if (!settings.paragraph.trim()) {
+    panel.append(
+      header,
+      createElement("p", {
+        className: "share-hint",
+        text: "Add some text first, then open this panel to generate a QR code.",
+      }),
+    );
+    backdrop.append(panel);
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) {
+        isSharePanelOpen = false;
+        render();
+      }
+    });
+    return backdrop;
+  }
+
+  const shareUrl = getShareUrl();
+  const qrImage = createElement("img", {
+    className: "qr-code",
+    attributes: {
+      src: getQrCodeUrl(shareUrl),
+      alt: "QR code for the current learning text",
+      width: "260",
+      height: "260",
+    },
+  });
+  const urlField = createElement("input", {
+    className: "share-url-field",
+    attributes: {
+      value: shareUrl,
+      readonly: "true",
+      "aria-label": "Share link",
+    },
+  });
+  urlField.addEventListener("focus", () => urlField.select());
+
+  const buttonRow = createElement("div", { className: "share-actions" });
+  const copyButton = createElement("button", {
+    className: "secondary-button compact-button",
+    text: "Copy link",
+  });
+  copyButton.type = "button";
+  copyButton.addEventListener("click", () => {
+    navigator.clipboard?.writeText(shareUrl).catch(() => {
+      urlField.focus();
+    });
+  });
+  buttonRow.append(copyButton);
+
+  if ("share" in navigator) {
+    const nativeShareButton = createElement("button", {
+      className: "primary-button compact-button",
+      text: "Share",
+    });
+    nativeShareButton.type = "button";
+    nativeShareButton.addEventListener("click", () => {
+      navigator
+        .share({
+          title: "Lang Learn text",
+          text: "Open this text in Lang Learn.",
+          url: shareUrl,
+        })
+        .catch(() => undefined);
+    });
+    buttonRow.append(nativeShareButton);
+  }
+
+  panel.append(
+    header,
+    qrImage,
+    createElement("p", {
+      className: "share-hint",
+      text: "The QR code opens this app with the current text and language.",
+    }),
+    urlField,
+    buttonRow,
+  );
+  backdrop.append(panel);
+  backdrop.addEventListener("click", (event) => {
+    if (event.target === backdrop) {
+      isSharePanelOpen = false;
+      render();
+    }
+  });
+  return backdrop;
 }
 
 function renderSpeedPresets(): HTMLElement {
@@ -1330,6 +1704,10 @@ function render(): void {
 
   appRoot.append(renderGlobalControls());
   appRoot.append(renderBottomPlaybackControls());
+
+  if (isSharePanelOpen) {
+    appRoot.append(renderSharePanel());
+  }
 }
 
 function loadVoices(): void {
@@ -1337,7 +1715,7 @@ function loadVoices(): void {
     return;
   }
 
-  speechState.voices = window.speechSynthesis.getVoices();
+  refreshVoices();
   render();
 }
 
@@ -1362,4 +1740,5 @@ if ("serviceWorker" in navigator && !isLocalDevHost) {
 }
 
 applyTheme();
+applySharedSettingsFromUrl();
 render();
