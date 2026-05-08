@@ -190,7 +190,7 @@ h2 {
 .primary-button:focus-visible,
 .secondary-button:focus-visible,
 .icon-button:focus-visible,
-.speed-fab:focus-visible {
+.speed-preset:focus-visible {
   border-color: var(--accent);
   box-shadow: 0 0 0 4px rgba(49, 92, 253, 0.16);
   outline: none;
@@ -268,16 +268,27 @@ h2 {
   display: grid;
   gap: 10px;
 }
+.reading-screen.editing-all {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+.reading-screen.editing-all .line-list {
+  min-height: calc(100vh - 182px);
+}
 .line-card {
+  position: relative;
   display: grid;
   gap: 8px;
+  touch-action: manipulation;
+}
+.is-reordering,
+.is-reordering * {
+  touch-action: none;
+  user-select: none;
 }
 .line-card.dragging {
   opacity: 0.55;
-}
-.line-card.drag-over {
-  outline: 2px solid var(--row-accent);
-  outline-offset: 3px;
+  cursor: grabbing;
 }
 .line-actions {
   display: grid;
@@ -296,10 +307,10 @@ h2 {
   border-radius: 14px;
   background: linear-gradient(
     135deg,
-    var(--row-accent, var(--accent)),
-    color-mix(in srgb, var(--row-accent, var(--accent)) 72%, #172033)
+    color-mix(in srgb, var(--row-accent, var(--accent)) 16%, white),
+    color-mix(in srgb, var(--row-accent, var(--accent)) 28%, white)
   );
-  color: white;
+  color: #172033;
   text-align: left;
   box-shadow: var(--shadow);
   transition:
@@ -315,24 +326,28 @@ h2 {
   background:
     linear-gradient(
       135deg,
-      color-mix(in srgb, var(--row-accent, var(--accent)) 72%, white),
-      var(--row-accent, var(--accent-strong))
+      color-mix(in srgb, var(--row-accent, var(--accent)) 34%, white),
+      color-mix(in srgb, var(--row-accent, var(--accent)) 46%, white)
     );
 }
-.line-edit-button,
+.line-reorder-button,
 .play-icon {
   display: inline-grid;
   place-items: center;
   border-radius: 999px;
 }
-.line-edit-button {
+.line-reorder-button {
   width: 38px;
   min-width: 38px;
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--row-accent, var(--accent)) 16%, transparent);
   color: var(--row-accent, var(--accent-strong));
+  cursor: grab;
   font-size: 1rem;
   font-weight: 900;
+}
+.line-reorder-button:active {
+  cursor: grabbing;
 }
 .line-edit-input,
 .add-line-input {
@@ -351,6 +366,7 @@ h2 {
 .add-line-form {
   display: grid;
   grid-template-columns: 1fr 44px;
+  align-items: stretch;
   gap: 8px;
   padding: 10px;
   border: 1px dashed var(--border);
@@ -359,6 +375,7 @@ h2 {
 }
 .add-line-input {
   padding: 11px 12px;
+  resize: vertical;
 }
 .add-line-button {
   width: 44px;
@@ -366,11 +383,30 @@ h2 {
   border-radius: 14px;
   font-size: 1.2rem;
 }
+.edit-all-form {
+  display: grid;
+  min-height: 100%;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+.edit-all-textarea {
+  width: 100%;
+  min-height: calc(100vh - 206px);
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel-solid);
+  color: var(--text);
+  resize: none;
+}
 .play-icon {
   width: 26px;
   height: 26px;
-  background: rgba(255, 255, 255, 0.18);
-  color: white;
+  background: color-mix(in srgb, var(--row-accent, var(--accent)) 20%, white);
+  color: color-mix(in srgb, var(--row-accent, var(--accent)) 72%, #172033);
   font-size: 0.8rem;
   line-height: 1;
 }
@@ -481,18 +517,6 @@ h2 {
   font-size: 0.82rem;
   font-weight: 650;
 }
-.speed-fab {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 82px;
-  padding: 12px 14px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--text);
-  color: white;
-  box-shadow: 0 18px 48px rgba(23, 32, 51, 0.28);
-}
 .global-controls {
   position: fixed;
   z-index: 30;
@@ -534,16 +558,25 @@ h2 {
   gap: 8px;
   padding: 8px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  max-width: min(840px, calc(100% - 28px));
+  border-radius: 18px;
   background: var(--panel);
   box-shadow: var(--shadow);
   backdrop-filter: blur(18px);
 }
-.bottom-playback-controls .compact-button,
-.bottom-playback-controls .speed-fab {
+.bottom-playback-controls.edit-mode {
+  left: max(14px, calc((100vw - 840px) / 2 + 18px));
+  justify-content: space-between;
+}
+.bottom-playback-controls .compact-button {
   min-height: 38px;
   padding: 9px 12px;
   box-shadow: none;
+}
+.bottom-speed-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .dialog-backdrop {
   position: fixed;
@@ -580,6 +613,21 @@ h2 {
   color: var(--muted);
   font-size: 0.88rem;
   font-weight: 800;
+}
+.speed-preset {
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-solid));
+  color: var(--accent-strong);
+  font-size: 0.86rem;
+  font-weight: 900;
+}
+.speed-preset.selected {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: white;
 }
 .settings-screen {
   min-height: auto;

@@ -38,7 +38,11 @@ The included GitHub Actions workflow builds the app on every push to `main` and 
 npm run dev
 ```
 
-Then open <http://localhost:4173>.
+Then open <http://localhost:4173>, or the port printed by the dev server if
+`4173` is already in use.
+
+The dev server watches `src/`, `public/`, `index.html`, and `tsconfig.json`.
+When you save a change, it rebuilds `dist/` and reloads the browser tab.
 
 ## Project layout
 

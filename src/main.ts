@@ -48,6 +48,7 @@ if (!app) {
 }
 
 const appRoot = app;
+const EDIT_ALL_FORM_ID = "edit-all-form";
 
 const CHEAT_SHEET_SECTIONS: CheatSheetSection[] = [
   {
@@ -153,11 +154,13 @@ const CHEAT_SHEET_SECTIONS: CheatSheetSection[] = [
 
 let settings: PersistedSettings = loadSettings();
 let screen: AppScreen = "input";
-let isSpeedDialogOpen = false;
 let isTopBarOpen = false;
 let speechDelayId: number | null = null;
 let editingLineId: string | null = null;
 let draggedLineId: string | null = null;
+let dragPreviewLines: ReadingLine[] | null = null;
+let longPressTimerId: number | null = null;
+let isEditingAll = false;
 const expandedLineIds = new Set<string>();
 const translationCache = new Map<string, TranslationState>();
 const speechState: SpeechState = {
@@ -212,34 +215,169 @@ function updateLineText(lineId: string, text: string): void {
 }
 
 function appendLine(text: string): void {
-  const nextText = text.trim();
+  const newLines = paragraphToLines(text);
 
-  if (!nextText) {
+  if (newLines.length === 0) {
     return;
   }
 
   persistLines([
     ...paragraphToLines(settings.paragraph),
-    { id: `new-${Date.now()}`, text: nextText },
+    ...newLines.map((line, index) => ({
+      id: `new-${Date.now()}-${index}`,
+      text: line.text,
+    })),
   ]);
 }
 
-function reorderLines(sourceId: string, targetId: string): void {
+function getReorderedLines(
+  lines: ReadingLine[],
+  sourceId: string,
+  targetId: string,
+  placement: "before" | "after",
+): ReadingLine[] | null {
   if (sourceId === targetId) {
-    return;
+    return null;
   }
 
-  const lines = paragraphToLines(settings.paragraph);
+  const nextLines = [...lines];
   const sourceIndex = lines.findIndex((line) => line.id === sourceId);
   const targetIndex = lines.findIndex((line) => line.id === targetId);
 
   if (sourceIndex === -1 || targetIndex === -1) {
+    return null;
+  }
+
+  const [sourceLine] = nextLines.splice(sourceIndex, 1);
+  const adjustedTargetIndex = nextLines.findIndex((line) => line.id === targetId);
+  const insertIndex =
+    placement === "after" ? adjustedTargetIndex + 1 : adjustedTargetIndex;
+  nextLines.splice(insertIndex, 0, sourceLine);
+
+  if (nextLines.every((line, index) => line.id === lines[index]?.id)) {
+    return null;
+  }
+
+  return nextLines;
+}
+
+function clearLongPressTimer(): void {
+  if (longPressTimerId !== null) {
+    window.clearTimeout(longPressTimerId);
+    longPressTimerId = null;
+  }
+}
+
+function clearLineDragging(): void {
+  clearLongPressTimer();
+  draggedLineId = null;
+  dragPreviewLines = null;
+  window.removeEventListener("pointermove", handleLineDragMove, true);
+  window.removeEventListener("pointerup", handleLineDragEnd, true);
+  window.removeEventListener("pointercancel", handleLineDragCancel, true);
+  document
+    .querySelectorAll(".line-card.dragging")
+    .forEach((element) => element.classList.remove("dragging"));
+  document.documentElement.classList.remove("is-reordering");
+}
+
+function beginLineDrag(lineId: string, lineCard: HTMLElement): void {
+  draggedLineId = lineId;
+  dragPreviewLines = paragraphToLines(settings.paragraph);
+  lineCard.classList.add("dragging");
+  document.documentElement.classList.add("is-reordering");
+  window.addEventListener("pointermove", handleLineDragMove, true);
+  window.addEventListener("pointerup", handleLineDragEnd, true);
+  window.addEventListener("pointercancel", handleLineDragCancel, true);
+}
+
+function previewLineReorder(
+  targetId: string | null,
+  placement: "before" | "after",
+): void {
+  if (!draggedLineId || !targetId) {
     return;
   }
 
-  const [sourceLine] = lines.splice(sourceIndex, 1);
-  lines.splice(targetIndex, 0, sourceLine);
-  persistLines(lines);
+  const nextLines = getReorderedLines(
+    dragPreviewLines ?? paragraphToLines(settings.paragraph),
+    draggedLineId,
+    targetId,
+    placement,
+  );
+
+  if (!nextLines) {
+    return;
+  }
+
+  dragPreviewLines = nextLines;
+  render();
+}
+
+function updateDropTargetFromPoint(clientY: number): void {
+  if (!draggedLineId) {
+    return;
+  }
+
+  const lineCards = Array.from(
+    document.querySelectorAll<HTMLElement>(".line-card"),
+  ).filter((lineCard) => lineCard.dataset.lineId !== draggedLineId);
+
+  if (lineCards.length === 0) {
+    return;
+  }
+
+  for (const lineCard of lineCards) {
+    const targetRect = lineCard.getBoundingClientRect();
+
+    if (clientY < targetRect.top + targetRect.height / 2) {
+      previewLineReorder(lineCard.dataset.lineId ?? null, "before");
+      return;
+    }
+  }
+
+  previewLineReorder(
+    lineCards[lineCards.length - 1]?.dataset.lineId ?? null,
+    "after",
+  );
+}
+
+function finishLineDrag(clientY: number): void {
+  if (!draggedLineId) {
+    return;
+  }
+
+  updateDropTargetFromPoint(clientY);
+  const nextLines = dragPreviewLines;
+  clearLineDragging();
+
+  if (nextLines) {
+    persistLines(nextLines);
+  }
+}
+
+function handleLineDragMove(event: PointerEvent): void {
+  if (!draggedLineId) {
+    return;
+  }
+
+  event.preventDefault();
+  updateDropTargetFromPoint(event.clientY);
+}
+
+function handleLineDragEnd(event: PointerEvent): void {
+  finishLineDrag(event.clientY);
+}
+
+function handleLineDragCancel(): void {
+  clearLineDragging();
+}
+
+function startLineLongPress(lineId: string, lineCard: HTMLElement): void {
+  clearLongPressTimer();
+  longPressTimerId = window.setTimeout(() => {
+    beginLineDrag(lineId, lineCard);
+  }, 450);
 }
 
 function createElement<K extends keyof HTMLElementTagNameMap>(
@@ -276,6 +414,7 @@ function stopSpeech(): void {
     window.clearTimeout(speechDelayId);
     speechDelayId = null;
   }
+  clearLongPressTimer();
 
   window.speechSynthesis.cancel();
   speechState.speakingId = null;
@@ -563,7 +702,9 @@ function renderSentenceListScreen(
   language: LearningLanguage,
   lines: ReadingLine[],
 ): HTMLElement {
-  const main = createElement("main", { className: "screen reading-screen" });
+  const main = createElement("main", {
+    className: `screen reading-screen ${isEditingAll ? "editing-all" : ""}`,
+  });
   const ttsMessage = getTtsMessage(language);
   if (ttsMessage) {
     main.append(
@@ -575,52 +716,58 @@ function renderSentenceListScreen(
     className: "line-list",
     attributes: { "aria-label": "Reading lines" },
   });
+  if (isEditingAll) {
+    lineList.append(renderEditAllForm(language));
+    main.append(lineList);
+    return main;
+  }
   lines.forEach((line, index) => {
     const isSpeaking = speechState.speakingId === line.id;
     const isExpanded = expandedLineIds.has(line.id);
     const lineCard = createElement("article", {
-      className: `line-card ${isExpanded ? "expanded" : ""}`,
-      attributes: { draggable: editingLineId === line.id ? "false" : "true" },
+      className: `line-card ${isExpanded ? "expanded" : ""} ${
+        draggedLineId === line.id ? "dragging" : ""
+      }`,
+      attributes: { "data-line-id": line.id },
     });
     lineCard.style.setProperty("--row-accent", getRowAccent(index));
-    lineCard.addEventListener("dragstart", (event) => {
-      draggedLineId = line.id;
-      event.dataTransfer?.setData("text/plain", line.id);
-      lineCard.classList.add("dragging");
-    });
-    lineCard.addEventListener("dragend", () => {
-      draggedLineId = null;
-      lineCard.classList.remove("dragging");
-    });
-    lineCard.addEventListener("dragover", (event) => {
-      event.preventDefault();
-      lineCard.classList.add("drag-over");
-    });
-    lineCard.addEventListener("dragleave", () => {
-      lineCard.classList.remove("drag-over");
-    });
-    lineCard.addEventListener("drop", (event) => {
-      event.preventDefault();
-      lineCard.classList.remove("drag-over");
-      const sourceId = event.dataTransfer?.getData("text/plain") || draggedLineId;
-      if (sourceId) {
-        reorderLines(sourceId, line.id);
+    lineCard.addEventListener("pointerdown", (event) => {
+      if (
+        editingLineId === line.id ||
+        !(event.target instanceof HTMLElement) ||
+        event.target.closest("button, input")
+      ) {
+        return;
       }
+
+      clearLongPressTimer();
+      startLineLongPress(line.id, lineCard);
+    });
+    lineCard.addEventListener("pointerup", (event) => {
+      clearLongPressTimer();
+      finishLineDrag(event.clientY);
+    });
+    lineCard.addEventListener("pointercancel", () => {
+      clearLineDragging();
     });
     const lineActions = createElement("div", { className: "line-actions" });
-    const editLineButton = createElement("button", {
-      className: "line-edit-button",
-      text: "✎",
+    const reorderLineButton = createElement("button", {
+      className: "line-reorder-button",
+      text: "↕",
       attributes: {
-        "aria-label": `Edit paragraph from line ${index + 1}`,
-        title: "Edit text",
+        "aria-label": `Drag to reorder line ${index + 1}`,
+        title: "Drag to reorder",
       },
     });
-    editLineButton.type = "button";
-    editLineButton.addEventListener("click", () => {
-      editingLineId = line.id;
-      render();
+    reorderLineButton.type = "button";
+    reorderLineButton.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      reorderLineButton.setPointerCapture(event.pointerId);
+      beginLineDrag(line.id, lineCard);
+      event.stopPropagation();
     });
+    reorderLineButton.addEventListener("pointerup", clearLongPressTimer);
+    reorderLineButton.addEventListener("pointercancel", clearLineDragging);
 
     const lineBody =
       editingLineId === line.id
@@ -645,7 +792,7 @@ function renderSentenceListScreen(
       render();
     });
 
-    lineActions.append(editLineButton, lineBody, expandButton);
+    lineActions.append(reorderLineButton, lineBody, expandButton);
     lineCard.append(lineActions);
 
     if (isExpanded) {
@@ -708,11 +855,12 @@ function renderLineEditInput(line: ReadingLine): HTMLInputElement {
 
 function renderAddLineForm(language: LearningLanguage): HTMLElement {
   const form = createElement("form", { className: "add-line-form" });
-  const input = createElement("input", {
+  const input = createElement("textarea", {
     className: "add-line-input",
     attributes: {
       "aria-label": "Add sentence",
       placeholder: language.placeholder.split("\n")[0] ?? "Add a sentence",
+      rows: "3",
     },
   });
   const button = createElement("button", {
@@ -721,12 +869,47 @@ function renderAddLineForm(language: LearningLanguage): HTMLElement {
     attributes: { "aria-label": "Add sentence" },
   });
   button.type = "submit";
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      form.requestSubmit();
+    }
+  });
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     appendLine(input.value);
     input.value = "";
   });
   form.append(input, button);
+  return form;
+}
+
+function renderEditAllForm(language: LearningLanguage): HTMLElement {
+  const form = createElement("form", {
+    className: "edit-all-form",
+    attributes: { id: EDIT_ALL_FORM_ID },
+  });
+  const textarea = createElement("textarea", {
+    className: "edit-all-textarea",
+    attributes: {
+      "aria-label": "Edit all sentences",
+      rows: "8",
+      placeholder: language.placeholder,
+    },
+  });
+  textarea.value = settings.paragraph;
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    isEditingAll = false;
+    updateSettings({ ...settings, paragraph: textarea.value });
+  });
+  form.append(textarea);
+  window.setTimeout(() => {
+    textarea.focus();
+    textarea.selectionStart = textarea.value.length;
+    textarea.selectionEnd = textarea.value.length;
+  }, 0);
   return form;
 }
 
@@ -742,7 +925,7 @@ function renderHelpScreen(): HTMLElement {
     ["✎", "Edit row", "Use the pencil to edit only that sentence in place."],
     ["+", "Expand", "Open translation, word playback, and grammar notes for a sentence."],
     ["＋", "Add row", "Use the input at the end of the list to add a new sentence."],
-    ["↕", "Reorder", "Drag a sentence row to rearrange your reading order."],
+    ["↕", "Reorder", "Drag the reorder handle, then release on the destination line."],
     ["Cheat", "Cheat sheet", "Open weekdays, alphabet, numbers, pronouns, and common phrases."],
     ["Speed", "Playback speed", "Adjust speech speed from 0.5x to 2x."],
     ["ABC", "Letter modes", "Test phonetic pause, extra slow, or repeat mode from Settings."],
@@ -1000,20 +1183,6 @@ function renderCheatSheetScreen(language: LearningLanguage): HTMLElement {
   return main;
 }
 
-function renderSpeedButton(): HTMLButtonElement {
-  const button = createElement("button", {
-    className: "speed-fab",
-    attributes: { "aria-label": "Open playback speed settings" },
-  });
-  button.type = "button";
-  button.innerHTML = `<span aria-hidden="true">⚙︎</span><strong>${settings.speed.toFixed(2).replace(/\.00$/, "")}×</strong>`;
-  button.addEventListener("click", () => {
-    isSpeedDialogOpen = true;
-    render();
-  });
-  return button;
-}
-
 function renderGlobalControls(): HTMLElement {
   const controls = createElement("header", {
     className: `global-controls ${isTopBarOpen ? "open" : ""}`,
@@ -1070,104 +1239,82 @@ function renderGlobalControls(): HTMLElement {
   return controls;
 }
 
-function renderBottomPlaybackControls(): HTMLElement {
-  const controls = createElement("nav", {
-    className: "bottom-playback-controls",
-    attributes: { "aria-label": "Playback controls" },
+function renderSpeedPresets(): HTMLElement {
+  const presetGroup = createElement("div", {
+    className: "bottom-speed-presets",
+    attributes: { "aria-label": "Playback speed presets" },
   });
-  const stopButton = createElement("button", {
-    className: "secondary-button compact-button",
-    text: "Stop",
+  [0.5, 0.75, 1, 1.25, 1.5, 2].forEach((speed) => {
+    const isSelected = settings.speed === speed;
+    const presetButton = createElement("button", {
+      className: `speed-preset ${isSelected ? "selected" : ""}`,
+      text: `${speed.toFixed(2).replace(/\.00$/, "")}×`,
+      attributes: { "aria-pressed": String(isSelected) },
+    });
+    presetButton.type = "button";
+    presetButton.addEventListener("click", () => {
+      updateSettings({ ...settings, speed: clampSpeed(speed) });
+    });
+    presetGroup.append(presetButton);
   });
-  stopButton.type = "button";
-  stopButton.disabled = !speechState.speakingId;
-  stopButton.addEventListener("click", stopSpeech);
-  controls.append(stopButton, renderSpeedButton());
-  return controls;
+  return presetGroup;
 }
 
-function renderSpeedDialog(): HTMLElement | null {
-  if (!isSpeedDialogOpen) {
-    return null;
+function renderBottomPlaybackControls(): HTMLElement {
+  const controls = createElement("nav", {
+    className: `bottom-playback-controls ${isEditingAll ? "edit-mode" : ""}`,
+    attributes: { "aria-label": "Playback controls" },
+  });
+
+  if (isEditingAll) {
+    const clearButton = createElement("button", {
+      className: "secondary-button compact-button",
+      text: "Clear",
+      attributes: { "aria-label": "Clear all sentences" },
+    });
+    clearButton.type = "button";
+    clearButton.addEventListener("click", () => {
+      if (!window.confirm("Remove all sentences?")) {
+        return;
+      }
+
+      isEditingAll = false;
+      updateSettings({ ...settings, paragraph: "" });
+    });
+
+    const saveButton = createElement("button", {
+      className: "primary-button compact-button",
+      text: "Save",
+      attributes: { form: EDIT_ALL_FORM_ID },
+    });
+    saveButton.type = "submit";
+
+    controls.append(clearButton, saveButton);
+    return controls;
   }
 
-  const backdrop = createElement("div", {
-    className: "dialog-backdrop",
-    attributes: { role: "presentation" },
+  const stopButton = createElement("button", {
+    className: "secondary-button compact-button",
+    text: speechState.speakingId ? "Stop" : "Edit",
   });
-  const dialog = createElement("section", {
-    className: "speed-dialog",
-    attributes: {
-      role: "dialog",
-      "aria-modal": "true",
-      "aria-labelledby": "speed-dialog-title",
-    },
-  });
-  const header = createElement("div", { className: "dialog-header" });
-  const titleGroup = createElement("div");
-  titleGroup.append(
-    createElement("p", { className: "eyebrow", text: "Playback" }),
-    createElement("h2", {
-      text: "Speed",
-      attributes: { id: "speed-dialog-title" },
-    }),
-  );
-  const closeButton = createElement("button", {
-    className: "icon-button",
-    text: "×",
-    attributes: { "aria-label": "Close speed settings" },
-  });
-  closeButton.type = "button";
-  closeButton.addEventListener("click", () => {
-    isSpeedDialogOpen = false;
-    render();
-  });
-  header.append(titleGroup, closeButton);
+  stopButton.type = "button";
+  stopButton.addEventListener("click", () => {
+    if (speechState.speakingId) {
+      stopSpeech();
+      return;
+    }
 
-  const rangeLabel = createElement("label", { className: "range-label" });
-  const rangeValue = createElement("span", {
-    text: `${settings.speed.toFixed(2).replace(/\.00$/, "")}×`,
+    isEditingAll = true;
+    goToScreen("input");
   });
-  const range = createElement("input", {
-    attributes: {
-      id: "speed-range",
-      type: "range",
-      min: "0.5",
-      max: "2",
-      step: "0.25",
-    },
-  });
-  range.value = String(settings.speed);
-  range.addEventListener("input", () => {
-    const nextSpeed = clampSpeed(Number(range.value));
-    updateSettings({ ...settings, speed: nextSpeed }, false);
-    rangeValue.textContent = `${nextSpeed.toFixed(2).replace(/\.00$/, "")}×`;
-  });
-  rangeLabel.append(rangeValue, range);
-
-  const ticks = createElement("div", {
-    className: "range-ticks",
-    attributes: { "aria-hidden": "true" },
-  });
-  ticks.append(
-    createElement("span", { text: "0.5×" }),
-    createElement("span", { text: "1×" }),
-    createElement("span", { text: "2×" }),
-  );
-
-  dialog.append(header, rangeLabel, ticks);
-  dialog.addEventListener("mousedown", (event) => event.stopPropagation());
-  backdrop.addEventListener("mousedown", () => {
-    isSpeedDialogOpen = false;
-    render();
-  });
-  backdrop.append(dialog);
-  return backdrop;
+  controls.append(stopButton);
+  controls.append(renderSpeedPresets());
+  return controls;
 }
 
 function render(): void {
   const language = findLanguage(settings.languageId);
-  const lines = paragraphToLines(settings.paragraph);
+  const lines = dragPreviewLines ?? paragraphToLines(settings.paragraph);
 
   appRoot.replaceChildren(
     screen === "settings"
@@ -1180,11 +1327,6 @@ function render(): void {
         ? renderInputScreen(language)
         : renderReadingScreen(language, lines),
   );
-
-  const dialog = renderSpeedDialog();
-  if (dialog) {
-    appRoot.append(dialog);
-  }
 
   appRoot.append(renderGlobalControls());
   appRoot.append(renderBottomPlaybackControls());
@@ -1205,9 +1347,17 @@ if (speechState.supportStatus === "supported") {
   window.addEventListener("pagehide", () => window.speechSynthesis.cancel());
 }
 
-if ("serviceWorker" in navigator) {
+const isLocalDevHost =
+  ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname) ||
+  window.location.hostname.startsWith("192.168.");
+
+if ("serviceWorker" in navigator && !isLocalDevHost) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register(new URL("./sw.js", import.meta.url));
+  });
+} else if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.getRegistrations().then((registrations) => {
+    registrations.forEach((registration) => registration.unregister());
   });
 }
 

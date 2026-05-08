@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc && node scripts/copy-static.mjs",
-    "dev": "npm run build && node scripts/serve.mjs dist",
+    "dev": "node scripts/dev.mjs",
     "preview": "node scripts/serve.mjs dist"
   },
   "devDependencies": {
