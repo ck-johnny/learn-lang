@@ -10,7 +10,7 @@ import {
   type PersistedSettings,
 } from "./data/storage.js";
 
-type AppScreen = "input" | "reading" | "settings" | "cheat-sheet" | "help";
+type AppScreen = "input" | "reading" | "settings" | "cheat-sheet" | "help" | "qr";
 
 type ReadingLine = {
   id: string;
@@ -63,6 +63,7 @@ const SCREEN_ROUTES: Record<AppScreen, string> = {
   settings: "/pages/settings",
   "cheat-sheet": "/pages/cheat",
   help: "/pages/help",
+  qr: "/pages/qr",
 };
 const SCREEN_PATH_LABELS: Record<AppScreen, string> = {
   input: "/learn lang",
@@ -70,6 +71,7 @@ const SCREEN_PATH_LABELS: Record<AppScreen, string> = {
   settings: "/learn lang/settings",
   "cheat-sheet": "/learn lang/cheat",
   help: "/learn lang/help",
+  qr: "/learn lang/qr",
 };
 
 const CHEAT_SHEET_SECTIONS: CheatSheetSection[] = [
@@ -192,7 +194,6 @@ const CHEAT_SHEET_SECTIONS: CheatSheetSection[] = [
 let settings: PersistedSettings = loadSettings();
 let screen: AppScreen = getInitialScreen();
 let isTopBarOpen = false;
-let isSharePanelOpen = false;
 let speechDelayId: number | null = null;
 let editingLineId: string | null = null;
 let draggedLineId: string | null = null;
@@ -300,6 +301,10 @@ function screenFromPath(pathname: string): AppScreen {
 
   if (routePath === "/pages/help") {
     return "help";
+  }
+
+  if (routePath === "/pages/qr" || routePath === "/pages/share") {
+    return "qr";
   }
 
   return "input";
@@ -940,7 +945,6 @@ function goToScreen(nextScreen: AppScreen, mode: "push" | "replace" = "push"): v
   stopSpeech();
   screen = nextScreen;
   isTopBarOpen = false;
-  isSharePanelOpen = false;
   persistLastPath(nextScreen);
   syncBrowserPath(nextScreen, mode);
   render();
@@ -1239,7 +1243,7 @@ function renderHelpScreen(): HTMLElement {
     ["↕", "Reorder", "Drag the reorder handle, then release on the destination line."],
     ["Cheat", "Cheat sheet", "Open weekdays, alphabet, numbers, pronouns, and common phrases."],
     ["Speed", "Playback speed", "Adjust speech speed from 0.5x to 2x."],
-    ["QR", "Share text", "Open the QR panel so another user can scan your current text."],
+    ["QR", "Share text", "Open the QR page so another user can scan your current text."],
     ["ABC", "Letter modes", "Test extra slow or repeat mode from Settings."],
     ["⚙", "Settings", "Change reading language and dark mode."],
     ["Stop", "Stop speech", "Stop any current line, word, or cheat sheet playback."],
@@ -1557,17 +1561,17 @@ function renderGlobalControls(): HTMLElement {
     helpButton.addEventListener("click", () => goToScreen("help"));
 
     const shareButton = createElement("button", {
-      className: "secondary-button compact-button",
+      className: `secondary-button compact-button ${
+        screen === "qr" ? "active" : ""
+      }`,
       text: "QR",
-      attributes: { "aria-label": "Share current text with QR code" },
+      attributes: {
+        "aria-current": screen === "qr" ? "page" : "false",
+        "aria-label": "Open QR share page",
+      },
     });
     shareButton.type = "button";
-    shareButton.disabled = !settings.paragraph.trim();
-    shareButton.addEventListener("click", () => {
-      isSharePanelOpen = true;
-      isTopBarOpen = false;
-      render();
-    });
+    shareButton.addEventListener("click", () => goToScreen("qr"));
 
     actionRow.append(
       homeButton,
@@ -1582,53 +1586,22 @@ function renderGlobalControls(): HTMLElement {
   return controls;
 }
 
-function renderSharePanel(): HTMLElement {
-  const backdrop = createElement("div", {
-    className: "share-backdrop",
-    attributes: { role: "presentation" },
-  });
+function renderQrScreen(): HTMLElement {
+  const main = createElement("main", { className: "screen qr-screen" });
   const panel = createElement("section", {
-    className: "share-panel",
-    attributes: {
-      role: "dialog",
-      "aria-modal": "true",
-      "aria-label": "Share current text",
-    },
+    className: "panel qr-panel",
+    attributes: { "aria-label": "QR share page" },
   });
-  const header = createElement("header", { className: "dialog-header" });
-  const titleBlock = createElement("div");
-  titleBlock.append(
-    createElement("p", { className: "eyebrow", text: "Share" }),
-    createElement("h2", { text: "Scan this text" }),
-  );
-  const closeButton = createElement("button", {
-    className: "icon-button",
-    text: "×",
-    attributes: { "aria-label": "Close share panel" },
-  });
-  closeButton.type = "button";
-  closeButton.addEventListener("click", () => {
-    isSharePanelOpen = false;
-    render();
-  });
-  header.append(titleBlock, closeButton);
 
   if (!settings.paragraph.trim()) {
     panel.append(
-      header,
       createElement("p", {
         className: "share-hint",
-        text: "Add some text first, then open this panel to generate a QR code.",
+        text: "Add some text first, then return here to generate a QR code.",
       }),
     );
-    backdrop.append(panel);
-    backdrop.addEventListener("click", (event) => {
-      if (event.target === backdrop) {
-        isSharePanelOpen = false;
-        render();
-      }
-    });
-    return backdrop;
+    main.append(panel);
+    return main;
   }
 
   const shareUrl = getShareUrl();
@@ -1683,7 +1656,6 @@ function renderSharePanel(): HTMLElement {
   }
 
   panel.append(
-    header,
     qrImage,
     createElement("p", {
       className: "share-hint",
@@ -1692,14 +1664,8 @@ function renderSharePanel(): HTMLElement {
     urlField,
     buttonRow,
   );
-  backdrop.append(panel);
-  backdrop.addEventListener("click", (event) => {
-    if (event.target === backdrop) {
-      isSharePanelOpen = false;
-      render();
-    }
-  });
-  return backdrop;
+  main.append(panel);
+  return main;
 }
 
 function renderSpeedPresets(): HTMLElement {
@@ -1789,6 +1755,8 @@ function render(): void {
         ? renderCheatSheetScreen(language)
       : screen === "help"
         ? renderHelpScreen()
+      : screen === "qr"
+        ? renderQrScreen()
       : screen === "input"
         ? renderInputScreen(language)
         : renderReadingScreen(language, lines),
@@ -1796,10 +1764,6 @@ function render(): void {
 
   appRoot.append(renderGlobalControls());
   appRoot.append(renderBottomPlaybackControls());
-
-  if (isSharePanelOpen) {
-    appRoot.append(renderSharePanel());
-  }
 }
 
 function loadVoices(): void {
@@ -1835,7 +1799,6 @@ window.addEventListener("popstate", () => {
   stopSpeech();
   screen = screenFromPath(window.location.pathname);
   isTopBarOpen = false;
-  isSharePanelOpen = false;
   persistLastPath(screen);
   render();
 });
