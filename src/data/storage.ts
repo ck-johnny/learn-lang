@@ -7,7 +7,7 @@ export type PersistedSettings = {
   speed: number;
   languageId: string;
   theme: "light" | "dark";
-  letterPlaybackMode: "spaced" | "extra-slow" | "repeat";
+  letterPlaybackMode: "extra-slow" | "repeat";
 };
 
 export const DEFAULT_SETTINGS: PersistedSettings = {
@@ -15,7 +15,7 @@ export const DEFAULT_SETTINGS: PersistedSettings = {
   speed: 1,
   languageId: DEFAULT_LANGUAGE.id,
   theme: "light",
-  letterPlaybackMode: "spaced",
+  letterPlaybackMode: "extra-slow",
 };
 
 function isBrowserStorageAvailable(): boolean {
@@ -55,7 +55,6 @@ export function loadSettings(): PersistedSettings {
           ? parsedSettings.theme
           : DEFAULT_SETTINGS.theme,
       letterPlaybackMode:
-        parsedSettings.letterPlaybackMode === "spaced" ||
         parsedSettings.letterPlaybackMode === "extra-slow" ||
         parsedSettings.letterPlaybackMode === "repeat"
           ? parsedSettings.letterPlaybackMode

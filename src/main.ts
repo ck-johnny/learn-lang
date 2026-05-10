@@ -52,6 +52,8 @@ if (!app) {
 
 const appRoot = app;
 const EDIT_ALL_FORM_ID = "edit-all-form";
+const LETTER_EXTRA_SLOW_RATE = 0.35;
+const LETTER_REPEAT_RATE = 0.1;
 
 const CHEAT_SHEET_SECTIONS: CheatSheetSection[] = [
   {
@@ -166,6 +168,7 @@ let dragPreviewLines: ReadingLine[] | null = null;
 let dragPointerId: number | null = null;
 let dragTouchId: number | null = null;
 let dragPreviewHasMoved = false;
+let dragDropIndicatorLineId: string | null = null;
 let longPressTimerId: number | null = null;
 let isEditingAll = false;
 const expandedLineIds = new Set<string>();
@@ -180,7 +183,7 @@ const speechState: SpeechState = {
 };
 
 function clampSpeed(speed: number): number {
-  return Math.min(2, Math.max(0.5, speed));
+  return Math.min(2, Math.max(0.25, speed));
 }
 
 function updateSettings(
@@ -327,6 +330,7 @@ function clearLineDragging(): void {
   dragPointerId = null;
   dragTouchId = null;
   dragPreviewHasMoved = false;
+  dragDropIndicatorLineId = null;
   window.removeEventListener("pointermove", handleLineDragMove, true);
   window.removeEventListener("pointerup", handleLineDragEnd, true);
   window.removeEventListener("pointercancel", handleLineDragCancel, true);
@@ -350,6 +354,7 @@ function beginLineDrag(
   dragPointerId = pointerId;
   dragTouchId = touchId;
   dragPreviewHasMoved = false;
+  dragDropIndicatorLineId = null;
   lineCard.classList.add("dragging");
   document.documentElement.classList.add("is-reordering");
   window.addEventListener("pointermove", handleLineDragMove, true);
@@ -384,6 +389,7 @@ function previewLineReorder(
 
   dragPreviewLines = nextLines;
   dragPreviewHasMoved = true;
+  dragDropIndicatorLineId = draggedLineId;
   render();
 }
 
@@ -707,60 +713,6 @@ function speakText(
   render();
 }
 
-function speakTextRepeated(
-  text: string,
-  id: string,
-  language: LearningLanguage,
-): void {
-  if (speechState.supportStatus === "unsupported" || !text.trim()) {
-    return;
-  }
-
-  if (speechDelayId !== null) {
-    window.clearTimeout(speechDelayId);
-    speechDelayId = null;
-  }
-
-  const voice = prepareVoiceForPlayback(language);
-  if (voice === undefined) {
-    render();
-    return;
-  }
-
-  window.speechSynthesis.cancel();
-  speechState.speakingId = id;
-
-  const queue = [text, text, text];
-  const speakNext = (): void => {
-    const nextText = queue.shift();
-
-    if (!nextText || speechState.speakingId !== id) {
-      speechState.speakingId = null;
-      render();
-      return;
-    }
-
-    const utterance = new SpeechSynthesisUtterance(nextText);
-    utterance.lang = language.speechLang;
-    utterance.rate = 0.55;
-    utterance.voice = voice ?? null;
-    utterance.onend = () => {
-      speechDelayId = window.setTimeout(speakNext, 420);
-    };
-    utterance.onerror = (event) => {
-      if (isVoiceUnavailableError(event.error)) {
-        markLanguageVoiceUnavailable(language);
-      }
-      speechState.speakingId = null;
-      render();
-    };
-    window.speechSynthesis.speak(utterance);
-    render();
-  };
-
-  speakNext();
-}
-
 function speakCheatSheetItem(
   item: CheatSheetItem,
   id: string,
@@ -774,16 +726,11 @@ function speakCheatSheetItem(
   }
 
   if (settings.letterPlaybackMode === "repeat") {
-    speakTextRepeated(text, id, language);
+    speakText(`${text}.\n${text}.\n${text}.`, id, language, LETTER_REPEAT_RATE);
     return;
   }
 
-  if (settings.letterPlaybackMode === "extra-slow") {
-    speakText(text, id, language, 0.35);
-    return;
-  }
-
-  speakText(`${text}...`, id, language, Math.min(settings.speed, 0.65));
+  speakText(text, id, language, LETTER_EXTRA_SLOW_RATE);
 }
 
 function speakLine(line: ReadingLine, language: LearningLanguage): void {
@@ -947,6 +894,15 @@ function renderSentenceListScreen(
     const isSpeaking = speechState.speakingId === line.id;
     const isExpanded = expandedLineIds.has(line.id);
     const isDraggedLine = draggedLineId === line.id;
+    if (dragPreviewHasMoved && dragDropIndicatorLineId === line.id) {
+      lineList.append(
+        createElement("div", {
+          className: "line-drop-indicator",
+          attributes: { "aria-hidden": "true" },
+        }),
+      );
+    }
+
     const lineCard = createElement("article", {
       className: `line-card ${isExpanded ? "expanded" : ""} ${
         isDraggedLine ? "dragging" : ""
@@ -1168,7 +1124,7 @@ function renderHelpScreen(): HTMLElement {
     ["Cheat", "Cheat sheet", "Open weekdays, alphabet, numbers, pronouns, and common phrases."],
     ["Speed", "Playback speed", "Adjust speech speed from 0.5x to 2x."],
     ["QR", "Share text", "Open the QR panel so another user can scan your current text."],
-    ["ABC", "Letter modes", "Test phonetic pause, extra slow, or repeat mode from Settings."],
+    ["ABC", "Letter modes", "Test extra slow or repeat mode from Settings."],
     ["⚙", "Settings", "Change reading language and dark mode."],
     ["Stop", "Stop speech", "Stop any current line, word, or cheat sheet playback."],
   ].forEach(([indicator, title, body]) => {
@@ -1339,7 +1295,6 @@ function renderSettingsScreen(language: LearningLanguage): HTMLElement {
     attributes: { id: "letter-playback-mode" },
   });
   [
-    ["spaced", "Phonetic + pause"],
     ["extra-slow", "Extra slow"],
     ["repeat", "Repeat 3 times"],
   ].forEach(([value, label]) => {
@@ -1357,7 +1312,7 @@ function renderSettingsScreen(language: LearningLanguage): HTMLElement {
         letterModeSelect.value === "extra-slow" ||
         letterModeSelect.value === "repeat"
           ? letterModeSelect.value
-          : "spaced",
+          : "extra-slow",
     });
   });
   letterModeLabel.append(letterModeSelect);
@@ -1618,7 +1573,7 @@ function renderSpeedPresets(): HTMLElement {
     className: "bottom-speed-presets",
     attributes: { "aria-label": "Playback speed presets" },
   });
-  [0.5, 0.75, 1, 1.25, 1.5, 2].forEach((speed) => {
+  [0.25, 0.5, 0.75, 1, 1.5, 2].forEach((speed) => {
     const isSelected = settings.speed === speed;
     const presetButton = createElement("button", {
       className: `speed-preset ${isSelected ? "selected" : ""}`,
@@ -1635,12 +1590,15 @@ function renderSpeedPresets(): HTMLElement {
 }
 
 function renderBottomPlaybackControls(): HTMLElement {
+  const shouldShowEditActions = isEditingAll && screen !== "cheat-sheet";
   const controls = createElement("nav", {
-    className: `bottom-playback-controls ${isEditingAll ? "edit-mode" : ""}`,
+    className: `bottom-playback-controls ${
+      shouldShowEditActions ? "edit-mode" : ""
+    }`,
     attributes: { "aria-label": "Playback controls" },
   });
 
-  if (isEditingAll) {
+  if (shouldShowEditActions) {
     const clearButton = createElement("button", {
       className: "secondary-button compact-button",
       text: "Clear",

@@ -7,7 +7,7 @@ A minimal installable web app for learning German by listening. Paste a paragrap
 - Paste a German paragraph on the input screen.
 - Each newline becomes a tappable line on the reading screen.
 - Tap a line to speak it with the browser's Text-to-Speech voice for German (`de-DE`). Tapping another line interrupts the current one.
-- Floating action button opens a 0.5×–2.0× playback speed slider in 0.25× steps.
+- Floating action button opens a 0.25×–2.0× playback speed slider in 0.25× steps.
 - Last paragraph, selected speed, and selected language are remembered with `localStorage`.
 - Installs as a PWA and caches the app shell for offline use after first load.
 - Language metadata is centralized so more languages can be added later.

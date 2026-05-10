@@ -280,6 +280,30 @@ h2 {
 .line-list.reorder-preview {
   gap: 10px;
 }
+.line-drop-indicator {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.line-drop-indicator::before,
+.line-drop-indicator::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--accent);
+  transform: translateY(-50%);
+}
+.line-drop-indicator::before {
+  left: 0;
+}
+.line-drop-indicator::after {
+  right: 0;
+}
 .reading-screen.editing-all {
   display: grid;
   grid-template-rows: 1fr;
