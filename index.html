@@ -8,13 +8,23 @@
       name="description"
       content="A minimal installable listening app for learning German and other languages."
     />
-    <link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="./styles.css" />
+    <script>
+      (() => {
+        const routeIndex = window.location.pathname.indexOf("/pages/");
+        const basePath =
+          routeIndex >= 0
+            ? window.location.pathname.slice(0, routeIndex + 1)
+            : window.location.pathname.replace(/[^/]*$/, "");
+        document.write(`<base href="${basePath || "/"}" />`);
+      })();
+    </script>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles.css" />
     <title>Lang Learn</title>
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="./main.js"></script>
+    <script type="module" src="main.js"></script>
   </body>
 </html>

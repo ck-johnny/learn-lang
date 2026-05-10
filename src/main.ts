@@ -22,12 +22,14 @@ type CheatSheetItem = {
   translation: string;
   note?: string;
   speechText?: string;
+  exampleText?: string;
   kind?: "letter";
 };
 
 type CheatSheetSection = {
   title: string;
   items: CheatSheetItem[];
+  references?: { label: string; url: string }[];
 };
 
 type TranslationState =
@@ -52,8 +54,23 @@ if (!app) {
 
 const appRoot = app;
 const EDIT_ALL_FORM_ID = "edit-all-form";
-const LETTER_EXTRA_SLOW_RATE = 0.35;
-const LETTER_REPEAT_RATE = 0.1;
+const LETTER_EXTRA_SLOW_RATE = 0.2;
+const LETTER_REPEAT_RATE = 0.08;
+const APP_BASE_PATH = new URL(".", import.meta.url).pathname;
+const SCREEN_ROUTES: Record<AppScreen, string> = {
+  input: "/",
+  reading: "/",
+  settings: "/pages/settings",
+  "cheat-sheet": "/pages/cheat",
+  help: "/pages/help",
+};
+const SCREEN_PATH_LABELS: Record<AppScreen, string> = {
+  input: "/learn lang",
+  reading: "/learn lang",
+  settings: "/learn lang/settings",
+  "cheat-sheet": "/learn lang/cheat",
+  help: "/learn lang/help",
+};
 
 const CHEAT_SHEET_SECTIONS: CheatSheetSection[] = [
   {
@@ -71,43 +88,58 @@ const CHEAT_SHEET_SECTIONS: CheatSheetSection[] = [
   {
     title: "Alphabet",
     items: [
-      ["A", "ah"],
-      ["B", "beh"],
-      ["C", "tseh"],
-      ["D", "deh"],
-      ["E", "eh"],
-      ["F", "eff"],
-      ["G", "geh"],
-      ["H", "hah"],
-      ["I", "ih"],
-      ["J", "jott"],
-      ["K", "kah"],
-      ["L", "ell"],
-      ["M", "emm"],
-      ["N", "enn"],
-      ["O", "oh"],
-      ["P", "peh"],
-      ["Q", "kuh"],
-      ["R", "err"],
-      ["S", "ess"],
-      ["T", "teh"],
-      ["U", "uh"],
-      ["V", "fau"],
-      ["W", "weh"],
-      ["X", "iks"],
-      ["Y", "üpsilon"],
-      ["Z", "tsett"],
-      ["Ä", "äh"],
-      ["Ö", "öh"],
-      ["Ü", "üh"],
-      ["ß", "esszett"],
-    ].map(([letter, speechText]) => ({
+      ["A", "ah", "Anton"],
+      ["B", "beh", "Berta"],
+      ["C", "tseh", "Caesar"],
+      ["D", "deh", "Dora"],
+      ["E", "eh", "Emil"],
+      ["F", "eff", "Friedrich"],
+      ["G", "geh", "Gerda"],
+      ["H", "hah", "Heinrich"],
+      ["I", "ih", "Ida"],
+      ["J", "jott", "Jürgen"],
+      ["K", "kah", "Kaufmann"],
+      ["L", "ell", "Lisa"],
+      ["M", "emm", "Martha"],
+      ["N", "enn", "Norbert"],
+      ["O", "oh", "Otto"],
+      ["P", "peh", "Paula"],
+      ["Q", "kuh", "Quelle"],
+      ["R", "err", "Richard"],
+      ["S", "ess", "Siegfried"],
+      ["T", "teh", "Theodor"],
+      ["U", "uh", "Ulrich"],
+      ["V", "fau", "Victor"],
+      ["W", "weh", "Wolfgang"],
+      ["X", "iks", "Xanthippe"],
+      ["Y", "üpsilon", "Ypsilon"],
+      ["Z", "tsett", "Zacharias"],
+      ["Ä", "äh", "Ärger"],
+      ["Ö", "öh", "Ökonom"],
+      ["Ü", "üh", "Übermut"],
+      ["ß", "esszett", "Eszett"],
+    ].map(([letter, pronunciation, example]) => ({
       text: letter,
-      translation: speechText,
-      note: "letter",
-      speechText,
+      translation: pronunciation,
+      note: `wie ${example}`,
+      speechText: letter.toLocaleLowerCase("de-DE"),
+      exampleText: `${letter} wie ${example}`,
       kind: "letter",
     })),
+    references: [
+      {
+        label: "DW Deutschtrainer: Buchstabieren",
+        url: "https://static.dw.com/downloads/49376952/Deutschtrainer_070_Buchstabieren_DEU.pdf",
+      },
+      {
+        label: "Deutsches Institut: Alphabet",
+        url: "https://www.deutschesinstitut.it/eng/alphabet/",
+      },
+      {
+        label: "LanguageTool: Buchstabiertafel",
+        url: "https://languagetool.org/insights/de/beitrag/buchstabiertafel/",
+      },
+    ],
   },
   {
     title: "Numbers",
@@ -158,7 +190,7 @@ const CHEAT_SHEET_SECTIONS: CheatSheetSection[] = [
 ];
 
 let settings: PersistedSettings = loadSettings();
-let screen: AppScreen = "input";
+let screen: AppScreen = getInitialScreen();
 let isTopBarOpen = false;
 let isSharePanelOpen = false;
 let speechDelayId: number | null = null;
@@ -243,6 +275,75 @@ function getQrCodeUrl(data: string): string {
   qrUrl.searchParams.set("qzone", "2");
   qrUrl.searchParams.set("data", data);
   return qrUrl.toString();
+}
+
+function normalizeRoutePath(pathname: string): string {
+  let routePath = pathname;
+
+  if (APP_BASE_PATH !== "/" && routePath.startsWith(APP_BASE_PATH)) {
+    routePath = `/${routePath.slice(APP_BASE_PATH.length)}`;
+  }
+
+  return routePath.replace(/\/+$/, "") || "/";
+}
+
+function screenFromPath(pathname: string): AppScreen {
+  const routePath = normalizeRoutePath(pathname);
+
+  if (routePath === "/pages/settings") {
+    return "settings";
+  }
+
+  if (routePath === "/pages/cheat" || routePath === "/pages/cheat-sheet") {
+    return "cheat-sheet";
+  }
+
+  if (routePath === "/pages/help") {
+    return "help";
+  }
+
+  return "input";
+}
+
+function pathForScreen(nextScreen: AppScreen): URL {
+  const routePath = SCREEN_ROUTES[nextScreen] ?? "/";
+  return new URL(routePath.replace(/^\//, ""), window.location.origin + APP_BASE_PATH);
+}
+
+function getInitialScreen(): AppScreen {
+  const currentPath = normalizeRoutePath(window.location.pathname);
+
+  if (currentPath !== "/") {
+    return screenFromPath(currentPath);
+  }
+
+  return screenFromPath(settings.lastPath);
+}
+
+function persistLastPath(nextScreen: AppScreen): void {
+  const nextLastPath = SCREEN_ROUTES[nextScreen] ?? "/";
+
+  if (settings.lastPath === nextLastPath) {
+    return;
+  }
+
+  settings = { ...settings, lastPath: nextLastPath };
+  saveSettings(settings);
+}
+
+function syncBrowserPath(nextScreen: AppScreen, mode: "push" | "replace"): void {
+  const nextUrl = pathForScreen(nextScreen);
+  nextUrl.search = window.location.search;
+
+  if (nextUrl.pathname === window.location.pathname && nextUrl.search === window.location.search) {
+    return;
+  }
+
+  window.history[mode === "push" ? "pushState" : "replaceState"](
+    { screen: nextScreen },
+    "",
+    nextUrl,
+  );
 }
 
 function paragraphToLines(paragraph: string): ReadingLine[] {
@@ -730,6 +831,11 @@ function speakCheatSheetItem(
     return;
   }
 
+  if (settings.letterPlaybackMode === "example" && item.exampleText) {
+    speakText(item.exampleText, id, language, LETTER_EXTRA_SLOW_RATE);
+    return;
+  }
+
   speakText(text, id, language, LETTER_EXTRA_SLOW_RATE);
 }
 
@@ -830,19 +936,26 @@ function renderInputScreen(language: LearningLanguage): HTMLElement {
   return renderSentenceListScreen(language, paragraphToLines(settings.paragraph));
 }
 
-function goToScreen(nextScreen: AppScreen): void {
+function goToScreen(nextScreen: AppScreen, mode: "push" | "replace" = "push"): void {
   stopSpeech();
   screen = nextScreen;
   isTopBarOpen = false;
   isSharePanelOpen = false;
+  persistLastPath(nextScreen);
+  syncBrowserPath(nextScreen, mode);
   render();
 }
 
 function renderCheatSheetNavButton(): HTMLButtonElement {
   const button = createElement("button", {
-    className: "secondary-button compact-button",
+    className: `secondary-button compact-button ${
+      screen === "cheat-sheet" ? "active" : ""
+    }`,
     text: "Cheat",
-    attributes: { "aria-label": "Open cheat sheet" },
+    attributes: {
+      "aria-current": screen === "cheat-sheet" ? "page" : "false",
+      "aria-label": "Open cheat sheet",
+    },
   });
   button.type = "button";
   button.addEventListener("click", () => goToScreen("cheat-sheet"));
@@ -851,9 +964,12 @@ function renderCheatSheetNavButton(): HTMLButtonElement {
 
 function renderSettingsNavButton(): HTMLButtonElement {
   const button = createElement("button", {
-    className: "icon-button",
+    className: `icon-button ${screen === "settings" ? "active" : ""}`,
     text: "⚙",
-    attributes: { "aria-label": "Open settings" },
+    attributes: {
+      "aria-current": screen === "settings" ? "page" : "false",
+      "aria-label": "Open settings",
+    },
   });
   button.type = "button";
   button.addEventListener("click", () => goToScreen("settings"));
@@ -1225,19 +1341,7 @@ function renderLineAnalysis(
 function renderSettingsScreen(language: LearningLanguage): HTMLElement {
   const main = createElement("main", { className: "screen settings-screen" });
   const header = createElement("header", { className: "settings-header" });
-  const backButton = createElement("button", {
-    className: "secondary-button",
-    text: "Done",
-  });
-  backButton.type = "button";
-  backButton.addEventListener("click", () => {
-    screen = "input";
-    render();
-  });
-  header.append(
-    createElement("div", { className: "app-title", text: "Settings" }),
-    backButton,
-  );
+  header.append(createElement("div", { className: "app-title", text: "Settings" }));
 
   const panel = createElement("section", {
     className: "panel settings-panel",
@@ -1297,6 +1401,7 @@ function renderSettingsScreen(language: LearningLanguage): HTMLElement {
   [
     ["extra-slow", "Extra slow"],
     ["repeat", "Repeat 3 times"],
+    ["example", "Letter + example"],
   ].forEach(([value, label]) => {
     const option = createElement("option", {
       text: label,
@@ -1310,7 +1415,8 @@ function renderSettingsScreen(language: LearningLanguage): HTMLElement {
       ...settings,
       letterPlaybackMode:
         letterModeSelect.value === "extra-slow" ||
-        letterModeSelect.value === "repeat"
+        letterModeSelect.value === "repeat" ||
+        letterModeSelect.value === "example"
           ? letterModeSelect.value
           : "extra-slow",
     });
@@ -1325,20 +1431,7 @@ function renderSettingsScreen(language: LearningLanguage): HTMLElement {
 function renderCheatSheetScreen(language: LearningLanguage): HTMLElement {
   const main = createElement("main", { className: "screen cheat-sheet-screen" });
   const header = createElement("header", { className: "settings-header" });
-  const backButton = createElement("button", {
-    className: "secondary-button",
-    text: "Done",
-  });
-  backButton.type = "button";
-  backButton.addEventListener("click", () => {
-    stopSpeech();
-    screen = "input";
-    render();
-  });
-  header.append(
-    createElement("div", { className: "app-title", text: "Cheat Sheet" }),
-    backButton,
-  );
+  header.append(createElement("div", { className: "app-title", text: "Cheat Sheet" }));
 
   const sections = createElement("section", {
     className: "cheat-section-list",
@@ -1371,6 +1464,26 @@ function renderCheatSheetScreen(language: LearningLanguage): HTMLElement {
     });
 
     sectionElement.append(itemGrid);
+    const sectionReferences = section.references ?? [];
+    if (sectionReferences.length) {
+      const references = createElement("p", { className: "cheat-references" });
+      references.append(document.createTextNode("Refs: "));
+      sectionReferences.forEach((reference, index) => {
+        const link = createElement("a", {
+          text: reference.label,
+          attributes: {
+            href: reference.url,
+            target: "_blank",
+            rel: "noreferrer",
+          },
+        });
+        references.append(link);
+        if (index < sectionReferences.length - 1) {
+          references.append(document.createTextNode(" · "));
+        }
+      });
+      sectionElement.append(references);
+    }
     sections.append(sectionElement);
   });
 
@@ -1383,6 +1496,19 @@ function renderGlobalControls(): HTMLElement {
     className: `global-controls ${isTopBarOpen ? "open" : ""}`,
   });
   const primaryRow = createElement("div", { className: "global-row" });
+  const pathButton = createElement("button", {
+    className: "path-display",
+    text: SCREEN_PATH_LABELS[screen],
+    attributes: {
+      "aria-label": "Open navigation",
+      title: "Open navigation",
+    },
+  });
+  pathButton.type = "button";
+  pathButton.addEventListener("click", () => {
+    isTopBarOpen = !isTopBarOpen;
+    render();
+  });
   const menuButton = createElement("button", {
     className: "icon-button menu-button",
     text: isTopBarOpen ? "×" : "☰",
@@ -1396,10 +1522,7 @@ function renderGlobalControls(): HTMLElement {
     isTopBarOpen = !isTopBarOpen;
     render();
   });
-  primaryRow.append(
-    createElement("strong", { className: "app-title", text: "Lang Learn" }),
-    menuButton,
-  );
+  primaryRow.append(pathButton, menuButton);
   controls.append(primaryRow);
 
   if (isTopBarOpen) {
@@ -1408,16 +1531,27 @@ function renderGlobalControls(): HTMLElement {
       attributes: { "aria-label": "Global app controls" },
     });
     const homeButton = createElement("button", {
-      className: "secondary-button compact-button",
+      className: `secondary-button compact-button ${
+        screen === "input" || screen === "reading" ? "active" : ""
+      }`,
       text: "Home",
+      attributes: {
+        "aria-current":
+          screen === "input" || screen === "reading" ? "page" : "false",
+      },
     });
     homeButton.type = "button";
     homeButton.addEventListener("click", () => goToScreen("input"));
 
     const helpButton = createElement("button", {
-      className: "secondary-button compact-button",
+      className: `secondary-button compact-button ${
+        screen === "help" ? "active" : ""
+      }`,
       text: "Help",
-      attributes: { "aria-label": "Open help" },
+      attributes: {
+        "aria-current": screen === "help" ? "page" : "false",
+        "aria-label": "Open help",
+      },
     });
     helpButton.type = "button";
     helpButton.addEventListener("click", () => goToScreen("help"));
@@ -1697,6 +1831,17 @@ if ("serviceWorker" in navigator && !isLocalDevHost) {
   });
 }
 
+window.addEventListener("popstate", () => {
+  stopSpeech();
+  screen = screenFromPath(window.location.pathname);
+  isTopBarOpen = false;
+  isSharePanelOpen = false;
+  persistLastPath(screen);
+  render();
+});
+
 applyTheme();
 applySharedSettingsFromUrl();
+persistLastPath(screen);
+syncBrowserPath(screen, "replace");
 render();

@@ -99,6 +99,20 @@ button:disabled {
   font-size: 1rem;
   font-weight: 900;
 }
+.path-display {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text);
+  font-size: 0.98rem;
+  font-weight: 900;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .top-actions {
   display: flex;
   align-items: center;
@@ -604,6 +618,11 @@ h2 {
   min-height: 38px;
   box-shadow: 0 18px 48px rgba(23, 32, 51, 0.18);
 }
+.global-controls .active {
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  background: var(--accent);
+  color: white;
+}
 .bottom-playback-controls {
   position: fixed;
   z-index: 30;
@@ -826,6 +845,17 @@ h2 {
 .cheat-item.speaking {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 18%, var(--panel-solid));
+}
+.cheat-references {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+.cheat-references a {
+  color: var(--accent-strong);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
 }
 .help-screen {
   min-height: auto;

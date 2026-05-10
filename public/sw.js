@@ -1,4 +1,4 @@
-const CACHE_NAME = "lang-learn-shell-v19";
+const CACHE_NAME = "lang-learn-shell-v20";
 const APP_SCOPE = self.registration.scope;
 const APP_SHELL = [
   "./",
@@ -37,6 +37,21 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") {
+    return;
+  }
+
+  if (event.request.mode === "navigate") {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response.ok) {
+            return response;
+          }
+
+          return caches.match(FALLBACK_URL).then((fallback) => fallback ?? response);
+        })
+        .catch(() => caches.match(FALLBACK_URL)),
+    );
     return;
   }
 
