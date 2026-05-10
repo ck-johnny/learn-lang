@@ -662,31 +662,6 @@ h2 {
   padding: 12px;
   background: rgba(23, 32, 51, 0.38);
 }
-.share-backdrop {
-  position: fixed;
-  z-index: 40;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 14px;
-  background: rgba(23, 32, 51, 0.42);
-}
-.share-panel {
-  display: grid;
-  width: min(420px, 100%);
-  gap: 14px;
-  padding: 18px;
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  background: var(--panel-solid);
-  box-shadow: var(--shadow);
-}
-.share-panel .eyebrow {
-  color: var(--accent-strong);
-}
-.share-panel h2 {
-  margin: 0;
-}
 .qr-code {
   justify-self: center;
   width: min(260px, 100%);
@@ -716,7 +691,7 @@ h2 {
 .share-actions {
   display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: center;
   gap: 8px;
 }
 .speed-dialog {
@@ -763,6 +738,12 @@ h2 {
 }
 .settings-screen {
   min-height: auto;
+}
+.qr-screen {
+  min-height: auto;
+}
+.qr-panel {
+  justify-items: center;
 }
 .cheat-sheet-screen {
   min-height: auto;
