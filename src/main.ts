@@ -12,6 +12,11 @@ import {
 
 type AppScreen = "input" | "reading" | "settings" | "cheat-sheet" | "help" | "qr";
 
+type BreadcrumbItem = {
+  label: string;
+  screen: AppScreen;
+};
+
 type ReadingLine = {
   id: string;
   text: string;
@@ -65,13 +70,13 @@ const SCREEN_ROUTES: Record<AppScreen, string> = {
   help: "/pages/help",
   qr: "/pages/qr",
 };
-const SCREEN_PATH_LABELS: Record<AppScreen, string> = {
-  input: "/learn lang",
-  reading: "/learn lang",
-  settings: "/learn lang/settings",
-  "cheat-sheet": "/learn lang/cheat",
-  help: "/learn lang/help",
-  qr: "/learn lang/qr",
+const SCREEN_BREADCRUMB_LABELS: Record<AppScreen, string> = {
+  input: "Learn Lang",
+  reading: "Learn Lang",
+  settings: "Settings",
+  "cheat-sheet": "Cheat",
+  help: "Help",
+  qr: "QR",
 };
 
 const CHEAT_SHEET_SECTIONS: CheatSheetSection[] = [
@@ -201,7 +206,8 @@ let dragPreviewLines: ReadingLine[] | null = null;
 let dragPointerId: number | null = null;
 let dragTouchId: number | null = null;
 let dragPreviewHasMoved = false;
-let dragDropIndicatorLineId: string | null = null;
+let dragPreviewBeforeLineId: string | null = null;
+let dragPreviewAtEnd = false;
 let longPressTimerId: number | null = null;
 let isEditingAll = false;
 const expandedLineIds = new Set<string>();
@@ -436,7 +442,8 @@ function clearLineDragging(): void {
   dragPointerId = null;
   dragTouchId = null;
   dragPreviewHasMoved = false;
-  dragDropIndicatorLineId = null;
+  dragPreviewBeforeLineId = null;
+  dragPreviewAtEnd = false;
   window.removeEventListener("pointermove", handleLineDragMove, true);
   window.removeEventListener("pointerup", handleLineDragEnd, true);
   window.removeEventListener("pointercancel", handleLineDragCancel, true);
@@ -460,7 +467,8 @@ function beginLineDrag(
   dragPointerId = pointerId;
   dragTouchId = touchId;
   dragPreviewHasMoved = false;
-  dragDropIndicatorLineId = null;
+  dragPreviewBeforeLineId = null;
+  dragPreviewAtEnd = false;
   lineCard.classList.add("dragging");
   document.documentElement.classList.add("is-reordering");
   window.addEventListener("pointermove", handleLineDragMove, true);
@@ -495,7 +503,9 @@ function previewLineReorder(
 
   dragPreviewLines = nextLines;
   dragPreviewHasMoved = true;
-  dragDropIndicatorLineId = draggedLineId;
+  const previewIndex = nextLines.findIndex((line) => line.id === draggedLineId);
+  dragPreviewBeforeLineId = nextLines[previewIndex + 1]?.id ?? null;
+  dragPreviewAtEnd = previewIndex === nextLines.length - 1;
   render();
 }
 
@@ -506,7 +516,11 @@ function updateDropTargetFromPoint(clientY: number): void {
 
   const lineCards = Array.from(
     document.querySelectorAll<HTMLElement>(".line-card"),
-  ).filter((lineCard) => lineCard.dataset.lineId !== draggedLineId);
+  ).filter(
+    (lineCard) =>
+      lineCard.dataset.lineId !== draggedLineId &&
+      !lineCard.classList.contains("line-card-preview"),
+  );
 
   if (lineCards.length === 0) {
     return;
@@ -980,6 +994,54 @@ function renderSettingsNavButton(): HTMLButtonElement {
   return button;
 }
 
+function getBreadcrumbItems(currentScreen: AppScreen): BreadcrumbItem[] {
+  const homeScreen = currentScreen === "reading" ? "reading" : "input";
+  const items: BreadcrumbItem[] = [
+    { label: SCREEN_BREADCRUMB_LABELS[homeScreen], screen: homeScreen },
+  ];
+
+  if (currentScreen !== "input" && currentScreen !== "reading") {
+    items.push({
+      label: SCREEN_BREADCRUMB_LABELS[currentScreen],
+      screen: currentScreen,
+    });
+  }
+
+  return items;
+}
+
+function renderBreadcrumbs(): HTMLElement {
+  const breadcrumbs = createElement("nav", {
+    className: "breadcrumb-nav",
+    attributes: { "aria-label": "Current location" },
+  });
+  const items = getBreadcrumbItems(screen);
+
+  items.forEach((item, index) => {
+    const isCurrent = index === items.length - 1;
+    const chip = createElement("button", {
+      className: `breadcrumb-chip ${isCurrent ? "current" : ""}`,
+      text: item.label,
+      attributes: {
+        "aria-current": isCurrent ? "page" : "false",
+      },
+    });
+    chip.type = "button";
+    chip.disabled = isCurrent;
+
+    if (!isCurrent) {
+      chip.addEventListener("click", () => goToScreen(item.screen));
+    }
+
+    if (index > 0) {
+      breadcrumbs.append(createElement("span", { className: "breadcrumb-separator", text: "/" }));
+    }
+    breadcrumbs.append(chip);
+  });
+
+  return breadcrumbs;
+}
+
 function renderReadingScreen(
   language: LearningLanguage,
   lines: ReadingLine[],
@@ -1010,18 +1072,49 @@ function renderSentenceListScreen(
     main.append(lineList);
     return main;
   }
+
+  const draggedLine = draggedLineId
+    ? paragraphToLines(settings.paragraph).find((line) => line.id === draggedLineId) ?? null
+    : null;
+  const draggedLineIndex = draggedLine
+    ? lines.findIndex((line) => line.id === draggedLine.id)
+    : -1;
+  const appendDragPreview = (beforeLineId: string | null, isEndSlot = false) => {
+    if (
+      !dragPreviewHasMoved ||
+      !draggedLine ||
+      (isEndSlot ? !dragPreviewAtEnd : dragPreviewBeforeLineId !== beforeLineId)
+    ) {
+      return;
+    }
+
+    const previewCard = createElement("article", {
+      className: "line-card line-card-preview",
+      attributes: { "aria-hidden": "true" },
+    });
+    previewCard.style.setProperty("--row-accent", getRowAccent(Math.max(0, draggedLineIndex)));
+
+    const previewActions = createElement("div", { className: "line-actions" });
+    const previewLine = createElement("div", { className: "reading-line" });
+    previewLine.append(
+      createElement("span", { className: "play-icon", text: "▶" }),
+      createElement("span", { className: "line-text", text: draggedLine.text }),
+    );
+    previewActions.append(
+      createElement("div", { className: "line-reorder-button", text: "↕" }),
+      previewLine,
+      createElement("div", { className: "expand-button", text: "+" }),
+    );
+    previewCard.append(previewActions);
+    lineList.append(previewCard);
+  };
+
   lines.forEach((line, index) => {
+    appendDragPreview(line.id);
+
     const isSpeaking = speechState.speakingId === line.id;
     const isExpanded = expandedLineIds.has(line.id);
     const isDraggedLine = draggedLineId === line.id;
-    if (dragPreviewHasMoved && dragDropIndicatorLineId === line.id) {
-      lineList.append(
-        createElement("div", {
-          className: "line-drop-indicator",
-          attributes: { "aria-hidden": "true" },
-        }),
-      );
-    }
 
     const lineCard = createElement("article", {
       className: `line-card ${isExpanded ? "expanded" : ""} ${
@@ -1116,6 +1209,7 @@ function renderSentenceListScreen(
 
     lineList.append(lineCard);
   });
+  appendDragPreview(null, true);
   lineList.append(renderAddLineForm(language));
   main.append(lineList);
 
@@ -1344,8 +1438,6 @@ function renderLineAnalysis(
 
 function renderSettingsScreen(language: LearningLanguage): HTMLElement {
   const main = createElement("main", { className: "screen settings-screen" });
-  const header = createElement("header", { className: "settings-header" });
-  header.append(createElement("div", { className: "app-title", text: "Settings" }));
 
   const panel = createElement("section", {
     className: "panel settings-panel",
@@ -1428,14 +1520,12 @@ function renderSettingsScreen(language: LearningLanguage): HTMLElement {
   letterModeLabel.append(letterModeSelect);
 
   panel.append(languageLabel, letterModeLabel, themeRow);
-  main.append(header, panel);
+  main.append(panel);
   return main;
 }
 
 function renderCheatSheetScreen(language: LearningLanguage): HTMLElement {
   const main = createElement("main", { className: "screen cheat-sheet-screen" });
-  const header = createElement("header", { className: "settings-header" });
-  header.append(createElement("div", { className: "app-title", text: "Cheat Sheet" }));
 
   const sections = createElement("section", {
     className: "cheat-section-list",
@@ -1491,7 +1581,7 @@ function renderCheatSheetScreen(language: LearningLanguage): HTMLElement {
     sections.append(sectionElement);
   });
 
-  main.append(header, sections);
+  main.append(sections);
   return main;
 }
 
@@ -1500,19 +1590,6 @@ function renderGlobalControls(): HTMLElement {
     className: `global-controls ${isTopBarOpen ? "open" : ""}`,
   });
   const primaryRow = createElement("div", { className: "global-row" });
-  const pathButton = createElement("button", {
-    className: "path-display",
-    text: SCREEN_PATH_LABELS[screen],
-    attributes: {
-      "aria-label": "Open navigation",
-      title: "Open navigation",
-    },
-  });
-  pathButton.type = "button";
-  pathButton.addEventListener("click", () => {
-    isTopBarOpen = !isTopBarOpen;
-    render();
-  });
   const menuButton = createElement("button", {
     className: "icon-button menu-button",
     text: isTopBarOpen ? "×" : "☰",
@@ -1526,7 +1603,7 @@ function renderGlobalControls(): HTMLElement {
     isTopBarOpen = !isTopBarOpen;
     render();
   });
-  primaryRow.append(pathButton, menuButton);
+  primaryRow.append(renderBreadcrumbs(), menuButton);
   controls.append(primaryRow);
 
   if (isTopBarOpen) {
@@ -1746,7 +1823,7 @@ function renderBottomPlaybackControls(): HTMLElement {
 
 function render(): void {
   const language = findLanguage(settings.languageId);
-  const lines = dragPreviewLines ?? paragraphToLines(settings.paragraph);
+  const lines = paragraphToLines(settings.paragraph);
 
   appRoot.replaceChildren(
     screen === "settings"
