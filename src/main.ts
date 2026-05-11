@@ -882,10 +882,6 @@ function speakLine(line: ReadingLine, language: LearningLanguage): void {
   speakText(line.text, line.id, language);
 }
 
-function speakWord(word: string, line: ReadingLine, language: LearningLanguage): void {
-  speakText(word, `${line.id}-word-${word}`, language);
-}
-
 function getTranslationCacheKey(text: string, language: LearningLanguage): string {
   return `${language.id}:en:${text.trim()}`;
 }
@@ -1471,7 +1467,7 @@ function renderHelpScreen(): HTMLElement {
   [
     ["▶", "Play a line", "Tap the blue row to read the full sentence aloud."],
     ["✎", "Edit row", "Use the pencil to edit only that sentence in place."],
-    ["+", "Expand", "Open translation, word playback, and grammar notes for a sentence."],
+    ["+", "Expand", "Open the sentence-level translation."],
     ["＋", "Add row", "Use the input at the end of the list to add a new sentence."],
     ["↕", "Reorder", "Drag the reorder handle, then release on the destination line."],
     ["Cheat", "Cheat sheet", "Open weekdays, alphabet, numbers, pronouns, and common phrases."],
@@ -1479,7 +1475,7 @@ function renderHelpScreen(): HTMLElement {
     ["QR", "Share text", "Open the QR page so another user can scan your current text."],
     ["ABC", "Letter modes", "Test extra slow or repeat mode from Settings."],
     ["⚙", "Settings", "Change reading language and dark mode."],
-    ["Stop", "Stop speech", "Stop any current line, word, or cheat sheet playback."],
+    ["Stop", "Stop speech", "Stop any current line or cheat sheet playback."],
   ].forEach(([indicator, title, body]) => {
     const card = createElement("article", { className: "feature-card" });
     card.append(
