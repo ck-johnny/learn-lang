@@ -3,7 +3,6 @@ import {
   SUPPORTED_LANGUAGES,
   type LearningLanguage,
 } from "./data/languages.js";
-import { analyzeSentence } from "./data/analysis.js";
 import {
   loadSettings,
   saveSettings,
@@ -1499,22 +1498,21 @@ function renderLineAnalysis(
   line: ReadingLine,
   language: LearningLanguage,
 ): HTMLElement {
-  const analysis = analyzeSentence(line.text, language);
   const cacheKey = getTranslationCacheKey(line.text, language);
-  const translation = translationCache.get(cacheKey);
   requestSentenceTranslation(line.text, language);
+  const translation = translationCache.get(cacheKey);
   const panel = createElement("section", {
     className: "analysis-panel",
-    attributes: { "aria-label": "Translation and word analysis" },
+    attributes: { "aria-label": "Translation" },
   });
 
   const sentenceBlock = createElement("div", { className: "sentence-translation" });
   const sentenceTranslation =
     translation?.status === "ready"
       ? translation.text
-      : translation?.status === "loading"
-        ? "Translating..."
-        : analysis.sentenceTranslation;
+      : translation?.status === "error"
+        ? "Translation unavailable."
+        : "Translating...";
   sentenceBlock.append(
     createElement("span", { className: "analysis-label", text: "Sentence" }),
     createElement("p", { text: sentenceTranslation }),
@@ -1522,52 +1520,18 @@ function renderLineAnalysis(
   if (translation?.status === "error") {
     sentenceBlock.append(
       createElement("small", {
-        text: `Live translation unavailable from ${translation.source}. Showing offline fallback. ${translation.message}. Check your connection or browser privacy settings.`,
+        text: `${translation.source} failed. ${translation.message}. Check your connection or browser privacy settings.`,
       }),
     );
   } else if (translation?.status === "ready") {
     sentenceBlock.append(
       createElement("small", {
-        text: `${translation.source}. Translated from ${language.label} to English. Word notes below use the offline grammar glossary.`,
+        text: `${translation.source}. Translated from ${language.label} to English.`,
       }),
     );
-  } else if (analysis.note) {
-    sentenceBlock.append(createElement("small", { text: analysis.note }));
   }
 
-  const wordGrid = createElement("div", { className: "word-analysis-grid" });
-  analysis.words.forEach((word) => {
-    const wordCard = createElement("button", {
-      className: `word-card ${
-        speechState.speakingId === `${line.id}-word-${word.token}` ? "speaking" : ""
-      }`,
-      attributes: { "aria-label": `Play ${word.token}` },
-    });
-    wordCard.type = "button";
-    wordCard.addEventListener("click", () => speakWord(word.token, line, language));
-
-    const meta = [word.partOfSpeech, word.lemma ? `lemma: ${word.lemma}` : ""]
-      .filter(Boolean)
-      .join(" · ");
-    wordCard.append(
-      createElement("strong", { text: word.token }),
-      createElement("span", {
-        className: "word-translation",
-        text: word.translation,
-      }),
-    );
-    if (meta) {
-      wordCard.append(createElement("span", { className: "word-meta", text: meta }));
-    }
-    const detailList = createElement("ul", { className: "grammar-list" });
-    word.details.forEach((detail) => {
-      detailList.append(createElement("li", { text: detail }));
-    });
-    wordCard.append(detailList);
-    wordGrid.append(wordCard);
-  });
-
-  panel.append(sentenceBlock, wordGrid);
+  panel.append(sentenceBlock);
   return panel;
 }
 
