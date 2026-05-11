@@ -3,7 +3,7 @@ import {
   SUPPORTED_LANGUAGES,
   type LearningLanguage,
 } from "./data/languages.js";
-import { analyzeSentence, splitWords } from "./data/analysis.js";
+import { analyzeSentence } from "./data/analysis.js";
 import {
   loadSettings,
   saveSettings,
@@ -39,8 +39,27 @@ type CheatSheetSection = {
 
 type TranslationState =
   | { status: "loading" }
-  | { status: "ready"; text: string }
-  | { status: "error"; message: string };
+  | { status: "ready"; text: string; source: string }
+  | { status: "error"; message: string; source: string };
+
+type BuiltInTranslatorAvailability = "available" | "downloadable" | "downloading" | "unavailable";
+
+type BuiltInTranslatorInstance = {
+  translate(text: string): Promise<string>;
+  destroy?: () => void;
+};
+
+type BuiltInTranslatorFactory = {
+  availability(options: {
+    sourceLanguage: string;
+    targetLanguage: string;
+  }): Promise<BuiltInTranslatorAvailability>;
+  create(options: {
+    sourceLanguage: string;
+    targetLanguage: string;
+    monitor?: (monitor: EventTarget) => void;
+  }): Promise<BuiltInTranslatorInstance>;
+};
 
 type SpeechState = {
   supportStatus: "supported" | "unsupported";
@@ -61,6 +80,8 @@ const appRoot = app;
 const EDIT_ALL_FORM_ID = "edit-all-form";
 const LETTER_EXTRA_SLOW_RATE = 0.2;
 const LETTER_REPEAT_RATE = 0.08;
+const CHROME_TRANSLATION_TIMEOUT_MS = 8000;
+const GOOGLE_TRANSLATION_TIMEOUT_MS = 12000;
 const APP_BASE_PATH = new URL(".", import.meta.url).pathname;
 const SCREEN_ROUTES: Record<AppScreen, string> = {
   input: "/",
@@ -867,7 +888,7 @@ function speakWord(word: string, line: ReadingLine, language: LearningLanguage):
 }
 
 function getTranslationCacheKey(text: string, language: LearningLanguage): string {
-  return `${language.id}:en:${text}`;
+  return `${language.id}:en:${text.trim()}`;
 }
 
 function parseGoogleTranslationPayload(payload: unknown): string | null {
@@ -885,15 +906,84 @@ function parseGoogleTranslationPayload(payload: unknown): string | null {
   return translatedChunks || null;
 }
 
-function requestSentenceTranslation(text: string, language: LearningLanguage): void {
-  const cacheKey = getTranslationCacheKey(text, language);
+function getBuiltInTranslator(): BuiltInTranslatorFactory | null {
+  const maybeWindow = window as Window &
+    typeof globalThis & { Translator?: BuiltInTranslatorFactory };
 
-  if (translationCache.has(cacheKey)) {
-    return;
+  return maybeWindow.Translator ?? null;
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      reject(new Error(`${label} timed out`));
+    }, timeoutMs);
+
+    promise
+      .then(resolve, reject)
+      .finally(() => window.clearTimeout(timeoutId));
+  });
+}
+
+async function translateWithChrome(
+  text: string,
+  language: LearningLanguage,
+): Promise<string> {
+  const translatorFactory = getBuiltInTranslator();
+
+  if (!translatorFactory) {
+    throw new Error("Chrome built-in Translator API is not available");
   }
 
-  translationCache.set(cacheKey, { status: "loading" });
+  const availability = await withTimeout(
+    translatorFactory.availability({
+      sourceLanguage: language.id,
+      targetLanguage: "en",
+    }),
+    CHROME_TRANSLATION_TIMEOUT_MS,
+    "Chrome built-in Translator availability check",
+  );
 
+  if (availability === "unavailable") {
+    throw new Error("Chrome built-in Translator does not support this language pair");
+  }
+
+  const translator = await withTimeout(
+    translatorFactory.create({
+      sourceLanguage: language.id,
+      targetLanguage: "en",
+    }),
+    CHROME_TRANSLATION_TIMEOUT_MS,
+    "Chrome built-in Translator setup",
+  );
+
+  try {
+    const translatedText = (
+      await withTimeout(
+        translator.translate(text),
+        CHROME_TRANSLATION_TIMEOUT_MS,
+        "Chrome built-in Translator",
+      )
+    ).trim();
+
+    if (!translatedText) {
+      throw new Error("Chrome built-in Translator returned an empty response");
+    }
+
+    return translatedText;
+  } finally {
+    translator.destroy?.();
+  }
+}
+
+async function translateWithGoogleEndpoint(
+  text: string,
+  language: LearningLanguage,
+): Promise<string> {
   const url = new URL("https://translate.googleapis.com/translate_a/single");
   url.searchParams.set("client", "gtx");
   url.searchParams.set("sl", language.id);
@@ -901,33 +991,83 @@ function requestSentenceTranslation(text: string, language: LearningLanguage): v
   url.searchParams.set("dt", "t");
   url.searchParams.set("q", text);
 
-  fetch(url)
-    .then((response) => {
-      if (!response.ok) {
-        throw new Error(`Translation failed with ${response.status}`);
-      }
+  const response = await withTimeout(
+    fetch(url),
+    GOOGLE_TRANSLATION_TIMEOUT_MS,
+    "Google translation endpoint",
+  );
 
-      return response.json() as Promise<unknown>;
-    })
-    .then((payload) => {
-      const translatedText = parseGoogleTranslationPayload(payload);
+  if (!response.ok) {
+    throw new Error(`Google translation failed with ${response.status}`);
+  }
 
-      if (!translatedText) {
-        throw new Error("Translation response was empty");
-      }
+  const translatedText = parseGoogleTranslationPayload(await response.json());
 
+  if (!translatedText) {
+    throw new Error("Google translation response was empty");
+  }
+
+  return translatedText;
+}
+
+function requestSentenceTranslation(text: string, language: LearningLanguage): void {
+  const trimmedText = text.trim();
+
+  if (!trimmedText) {
+    return;
+  }
+
+  const cacheKey = getTranslationCacheKey(text, language);
+
+  if (translationCache.has(cacheKey)) {
+    return;
+  }
+
+  translationCache.set(cacheKey, { status: "loading" });
+  window.setTimeout(render, 0);
+
+  if (language.id === "en") {
+    translationCache.set(cacheKey, {
+      status: "ready",
+      text: trimmedText,
+      source: "English source text",
+    });
+    window.setTimeout(render, 0);
+    return;
+  }
+
+  translateWithChrome(trimmedText, language)
+    .then((translatedText) => {
       translationCache.set(cacheKey, {
         status: "ready",
         text: translatedText,
+        source: "Chrome built-in Translator",
       });
       render();
     })
-    .catch((error: unknown) => {
-      translationCache.set(cacheKey, {
-        status: "error",
-        message: error instanceof Error ? error.message : "Translation failed",
-      });
-      render();
+    .catch((chromeError: unknown) => {
+      translateWithGoogleEndpoint(trimmedText, language)
+        .then((translatedText) => {
+          translationCache.set(cacheKey, {
+            status: "ready",
+            text: translatedText,
+            source: "Google Translate endpoint",
+          });
+          render();
+        })
+        .catch((googleError: unknown) => {
+          const chromeMessage =
+            chromeError instanceof Error ? chromeError.message : "Chrome translation failed";
+          const googleMessage =
+            googleError instanceof Error ? googleError.message : "Google translation failed";
+
+          translationCache.set(cacheKey, {
+            status: "error",
+            message: `${chromeMessage}; fallback failed: ${googleMessage}`,
+            source: "Chrome built-in Translator and Google Translate endpoint",
+          });
+          render();
+        });
     });
 }
 
@@ -1382,35 +1522,30 @@ function renderLineAnalysis(
   if (translation?.status === "error") {
     sentenceBlock.append(
       createElement("small", {
-        text: `Live translation unavailable. Showing offline fallback. ${translation.message}`,
+        text: `Live translation unavailable from ${translation.source}. Showing offline fallback. ${translation.message}. Check your connection or browser privacy settings.`,
       }),
     );
   } else if (translation?.status === "ready") {
     sentenceBlock.append(
       createElement("small", {
-        text: "Translated online. Word notes below use the offline grammar glossary.",
+        text: `${translation.source}. Translated from ${language.label} to English. Word notes below use the offline grammar glossary.`,
       }),
     );
   } else if (analysis.note) {
     sentenceBlock.append(createElement("small", { text: analysis.note }));
   }
 
-  const wordControls = createElement("div", { className: "word-play-list" });
-  splitWords(line.text).forEach((word) => {
-    const wordButton = createElement("button", {
-      className: `word-play-button ${
-        speechState.speakingId === `${line.id}-word-${word}` ? "speaking" : ""
-      }`,
-      text: word,
-    });
-    wordButton.type = "button";
-    wordButton.addEventListener("click", () => speakWord(word, line, language));
-    wordControls.append(wordButton);
-  });
-
   const wordGrid = createElement("div", { className: "word-analysis-grid" });
   analysis.words.forEach((word) => {
-    const wordCard = createElement("article", { className: "word-card" });
+    const wordCard = createElement("button", {
+      className: `word-card ${
+        speechState.speakingId === `${line.id}-word-${word.token}` ? "speaking" : ""
+      }`,
+      attributes: { "aria-label": `Play ${word.token}` },
+    });
+    wordCard.type = "button";
+    wordCard.addEventListener("click", () => speakWord(word.token, line, language));
+
     const meta = [word.partOfSpeech, word.lemma ? `lemma: ${word.lemma}` : ""]
       .filter(Boolean)
       .join(" · ");
@@ -1432,7 +1567,7 @@ function renderLineAnalysis(
     wordGrid.append(wordCard);
   });
 
-  panel.append(sentenceBlock, wordControls, wordGrid);
+  panel.append(sentenceBlock, wordGrid);
   return panel;
 }
 

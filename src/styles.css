@@ -504,8 +504,7 @@ h2 {
 .speaking .speak-indicator {
   color: var(--accent-strong);
 }
-.expand-button,
-.word-play-button {
+.expand-button {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--panel-solid);
@@ -550,18 +549,6 @@ h2 {
   color: var(--muted);
   font-weight: 700;
 }
-.word-play-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.word-play-button {
-  padding: 8px 10px;
-}
-.word-play-button.speaking {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 18%, var(--panel-solid));
-}
 .word-analysis-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -570,14 +557,27 @@ h2 {
 .word-card {
   display: grid;
   gap: 4px;
+  width: 100%;
   min-width: 0;
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--panel-solid);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 .word-card strong {
   color: var(--text);
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+.word-card.speaking {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel-solid));
+}
+.word-card.speaking strong {
+  color: var(--accent-strong);
 }
 .word-translation {
   color: var(--accent-strong);

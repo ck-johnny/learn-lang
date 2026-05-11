@@ -1,4 +1,4 @@
-const CACHE_NAME = "lang-learn-shell-v20";
+const CACHE_NAME = "lang-learn-shell-v21";
 const APP_SCOPE = self.registration.scope;
 const APP_SHELL = [
   "./",
@@ -6,6 +6,7 @@ const APP_SHELL = [
   "./icons/icon.svg",
   "./styles.css",
   "./main.js",
+  "./data/analysis.js",
   "./data/languages.js",
   "./data/storage.js",
 ].map((path) => new URL(path, APP_SCOPE).toString());

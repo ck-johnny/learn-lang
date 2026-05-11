@@ -369,29 +369,35 @@ export function analyzeSentence(
   language: LearningLanguage,
 ): SentenceAnalysis {
   const words = splitWords(text).map((token) => {
-    const entry = GERMAN_LEXICON.get(normalizeToken(token));
+    const entry =
+      language.id === "de" ? GERMAN_LEXICON.get(normalizeToken(token)) : undefined;
 
     return {
       token,
-      translation: entry?.translation ?? "Unknown",
+      translation: entry?.translation ?? "Offline glossary gap",
       lemma: entry?.lemma,
       partOfSpeech: entry?.partOfSpeech,
-      details: entry?.details ?? ["Not in the offline glossary yet"],
+      details:
+        entry?.details ??
+        [
+          language.id === "de"
+            ? "Not in the offline word glossary yet"
+            : "Offline grammar glossary is available for German only",
+        ],
     };
   });
 
   if (language.id !== "de") {
     return {
-      sentenceTranslation:
-        "Sentence translation is currently available for German text only.",
+      sentenceTranslation: `No offline sentence translation for ${language.label} yet.`,
       words,
-      note: "Switch the reading language to German for grammar-aware analysis.",
+      note: "Live sentence translation works online. Word notes are offline grammar hints.",
     };
   }
 
   const exactTranslation = EXACT_SENTENCES.get(normalizeSentence(text));
   const knownTranslations = words
-    .filter((word) => word.translation !== "Unknown")
+    .filter((word) => word.translation !== "Offline glossary gap")
     .map((word) => word.translation);
 
   return {
