@@ -9,7 +9,14 @@ import {
   type PersistedSettings,
 } from "./data/storage.js";
 
-type AppScreen = "input" | "reading" | "settings" | "cheat-sheet" | "help" | "qr";
+type AppScreen =
+  | "input"
+  | "reading"
+  | "settings"
+  | "cheat-sheet"
+  | "numbers"
+  | "help"
+  | "qr";
 
 type BreadcrumbItem = {
   label: string;
@@ -87,6 +94,7 @@ const SCREEN_ROUTES: Record<AppScreen, string> = {
   reading: "/",
   settings: "/pages/settings",
   "cheat-sheet": "/pages/cheat",
+  numbers: "/pages/numbers",
   help: "/pages/help",
   qr: "/pages/qr",
 };
@@ -95,6 +103,7 @@ const SCREEN_BREADCRUMB_LABELS: Record<AppScreen, string> = {
   reading: "Learn Lang",
   settings: "Settings",
   "cheat-sheet": "Cheat",
+  numbers: "Numbers",
   help: "Help",
   qr: "QR",
 };
@@ -230,6 +239,7 @@ let dragPreviewBeforeLineId: string | null = null;
 let dragPreviewAtEnd = false;
 let longPressTimerId: number | null = null;
 let isEditingAll = false;
+let converterNumberInput = "42";
 const expandedLineIds = new Set<string>();
 const translationCache = new Map<string, TranslationState>();
 const speechState: SpeechState = {
@@ -323,6 +333,10 @@ function screenFromPath(pathname: string): AppScreen {
 
   if (routePath === "/pages/cheat" || routePath === "/pages/cheat-sheet") {
     return "cheat-sheet";
+  }
+
+  if (routePath === "/pages/numbers" || routePath === "/pages/number-converter") {
+    return "numbers";
   }
 
   if (routePath === "/pages/help") {
@@ -1115,6 +1129,22 @@ function renderCheatSheetNavButton(): HTMLButtonElement {
   return button;
 }
 
+function renderNumbersNavButton(): HTMLButtonElement {
+  const button = createElement("button", {
+    className: `secondary-button compact-button ${
+      screen === "numbers" ? "active" : ""
+    }`,
+    text: "Numbers",
+    attributes: {
+      "aria-current": screen === "numbers" ? "page" : "false",
+      "aria-label": "Open number converter",
+    },
+  });
+  button.type = "button";
+  button.addEventListener("click", () => goToScreen("numbers"));
+  return button;
+}
+
 function renderSettingsNavButton(): HTMLButtonElement {
   const button = createElement("button", {
     className: `icon-button ${screen === "settings" ? "active" : ""}`,
@@ -1471,6 +1501,7 @@ function renderHelpScreen(): HTMLElement {
     ["＋", "Add row", "Use the input at the end of the list to add a new sentence."],
     ["↕", "Reorder", "Drag the reorder handle, then release on the destination line."],
     ["Cheat", "Cheat sheet", "Open weekdays, alphabet, numbers, pronouns, and common phrases."],
+    ["123", "Number converter", "Convert digits into words for the selected reading language."],
     ["Speed", "Playback speed", "Adjust speech speed from 0.5x to 2x."],
     ["QR", "Share text", "Open the QR page so another user can scan your current text."],
     ["ABC", "Letter modes", "Test extra slow or repeat mode from Settings."],
@@ -1619,6 +1650,318 @@ function renderSettingsScreen(language: LearningLanguage): HTMLElement {
   return main;
 }
 
+
+type NumberConversionResult =
+  | { status: "ready"; value: number; words: string }
+  | { status: "empty"; message: string }
+  | { status: "error"; message: string };
+
+const NUMBER_CONVERTER_MIN = -999_999;
+const NUMBER_CONVERTER_MAX = 999_999;
+
+function getNumberConverterId(language: LearningLanguage, value: number): string {
+  return `number-converter-${language.id}-${value}`;
+}
+
+function normalizeNumberInput(input: string): string {
+  return input.trim().replace(/,/g, "");
+}
+
+function parseNumberInput(input: string): NumberConversionResult {
+  const normalizedInput = normalizeNumberInput(input);
+
+  if (!normalizedInput) {
+    return { status: "empty", message: "Enter a whole number to convert." };
+  }
+
+  if (!/^-?\d+$/.test(normalizedInput)) {
+    return { status: "error", message: "Use digits only, with an optional minus sign." };
+  }
+
+  const value = Number(normalizedInput);
+  if (!Number.isSafeInteger(value)) {
+    return { status: "error", message: "That number is too large to convert safely." };
+  }
+
+  if (value < NUMBER_CONVERTER_MIN || value > NUMBER_CONVERTER_MAX) {
+    return {
+      status: "error",
+      message: `Choose a number from ${NUMBER_CONVERTER_MIN.toLocaleString()} to ${NUMBER_CONVERTER_MAX.toLocaleString()}.`,
+    };
+  }
+
+  return { status: "ready", value, words: "" };
+}
+
+function convertNumberToWords(value: number, language: LearningLanguage): string {
+  if (value < 0) {
+    const positiveWords = convertNumberToWords(Math.abs(value), language);
+    const minusWord = language.id === "de" ? "minus" : language.id === "fr" ? "moins" : "minus";
+    return `${minusWord} ${positiveWords}`;
+  }
+
+  if (language.id === "de") {
+    return numberToGerman(value);
+  }
+
+  if (language.id === "fr") {
+    return numberToFrench(value);
+  }
+
+  if (language.id === "es") {
+    return numberToSpanish(value);
+  }
+
+  return numberToEnglish(value);
+}
+
+function numberToGerman(value: number): string {
+  const units = ["null", "eins", "zwei", "drei", "vier", "fünf", "sechs", "sieben", "acht", "neun"];
+  const teens: Record<number, string> = {
+    10: "zehn",
+    11: "elf",
+    12: "zwölf",
+    13: "dreizehn",
+    14: "vierzehn",
+    15: "fünfzehn",
+    16: "sechzehn",
+    17: "siebzehn",
+    18: "achtzehn",
+    19: "neunzehn",
+  };
+  const tens: Record<number, string> = {
+    20: "zwanzig",
+    30: "dreißig",
+    40: "vierzig",
+    50: "fünfzig",
+    60: "sechzig",
+    70: "siebzig",
+    80: "achtzig",
+    90: "neunzig",
+  };
+  const underHundred = (number: number): string => {
+    if (number < 10) {
+      return units[number];
+    }
+    if (number < 20) {
+      return teens[number];
+    }
+    const unit = number % 10;
+    const ten = number - unit;
+    return unit === 0 ? tens[ten] : `${unit === 1 ? "ein" : units[unit]}und${tens[ten]}`;
+  };
+  const underThousand = (number: number): string => {
+    if (number < 100) {
+      return underHundred(number);
+    }
+    const hundred = Math.floor(number / 100);
+    const rest = number % 100;
+    const hundredWords = `${hundred === 1 ? "ein" : units[hundred]}hundert`;
+    return rest === 0 ? hundredWords : `${hundredWords}${underHundred(rest)}`;
+  };
+
+  if (value < 1000) {
+    return underThousand(value);
+  }
+
+  const thousands = Math.floor(value / 1000);
+  const rest = value % 1000;
+  const thousandWords = `${thousands === 1 ? "ein" : underThousand(thousands)}tausend`;
+  return rest === 0 ? thousandWords : `${thousandWords}${underThousand(rest)}`;
+}
+
+function numberToEnglish(value: number): string {
+  const units = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
+  const teens = ["ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"];
+  const tens = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+  const underHundred = (number: number): string => {
+    if (number < 10) return units[number];
+    if (number < 20) return teens[number - 10];
+    const unit = number % 10;
+    return unit === 0 ? tens[Math.floor(number / 10)] : `${tens[Math.floor(number / 10)]}-${units[unit]}`;
+  };
+  const underThousand = (number: number): string => {
+    if (number < 100) return underHundred(number);
+    const rest = number % 100;
+    const hundredWords = `${units[Math.floor(number / 100)]} hundred`;
+    return rest === 0 ? hundredWords : `${hundredWords} ${underHundred(rest)}`;
+  };
+
+  if (value < 1000) return underThousand(value);
+  const thousands = Math.floor(value / 1000);
+  const rest = value % 1000;
+  const thousandWords = `${underThousand(thousands)} thousand`;
+  return rest === 0 ? thousandWords : `${thousandWords} ${underThousand(rest)}`;
+}
+
+function numberToFrench(value: number): string {
+  const units = ["zéro", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf"];
+  const teens = ["dix", "onze", "douze", "treize", "quatorze", "quinze", "seize", "dix-sept", "dix-huit", "dix-neuf"];
+  const tens: Record<number, string> = { 20: "vingt", 30: "trente", 40: "quarante", 50: "cinquante", 60: "soixante" };
+  const underHundred = (number: number): string => {
+    if (number < 10) return units[number];
+    if (number < 20) return teens[number - 10];
+    if (number < 70) {
+      const ten = Math.floor(number / 10) * 10;
+      const unit = number % 10;
+      if (unit === 0) return tens[ten];
+      if (unit === 1) return `${tens[ten]} et un`;
+      return `${tens[ten]}-${units[unit]}`;
+    }
+    if (number < 80) {
+      return number === 71 ? "soixante et onze" : `soixante-${underHundred(number - 60)}`;
+    }
+    if (number === 80) return "quatre-vingts";
+    return `quatre-vingt-${underHundred(number - 80)}`;
+  };
+  const underThousand = (number: number): string => {
+    if (number < 100) return underHundred(number);
+    const rest = number % 100;
+    const hundreds = Math.floor(number / 100);
+    const hundredWords = hundreds === 1 ? "cent" : `${units[hundreds]} cent${rest === 0 ? "s" : ""}`;
+    return rest === 0 ? hundredWords : `${hundredWords} ${underHundred(rest)}`;
+  };
+
+  if (value < 1000) return underThousand(value);
+  const thousands = Math.floor(value / 1000);
+  const rest = value % 1000;
+  const thousandWords = thousands === 1 ? "mille" : `${underThousand(thousands)} mille`;
+  return rest === 0 ? thousandWords : `${thousandWords} ${underThousand(rest)}`;
+}
+
+function numberToSpanish(value: number): string {
+  const units = ["cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve"];
+  const underThirty: Record<number, string> = {
+    10: "diez", 11: "once", 12: "doce", 13: "trece", 14: "catorce", 15: "quince",
+    16: "dieciséis", 17: "diecisiete", 18: "dieciocho", 19: "diecinueve", 20: "veinte",
+    21: "veintiuno", 22: "veintidós", 23: "veintitrés", 24: "veinticuatro", 25: "veinticinco",
+    26: "veintiséis", 27: "veintisiete", 28: "veintiocho", 29: "veintinueve",
+  };
+  const tens: Record<number, string> = { 30: "treinta", 40: "cuarenta", 50: "cincuenta", 60: "sesenta", 70: "setenta", 80: "ochenta", 90: "noventa" };
+  const hundreds: Record<number, string> = {
+    100: "cien", 200: "doscientos", 300: "trescientos", 400: "cuatrocientos", 500: "quinientos",
+    600: "seiscientos", 700: "setecientos", 800: "ochocientos", 900: "novecientos",
+  };
+  const underHundred = (number: number): string => {
+    if (number < 10) return units[number];
+    if (number < 30) return underThirty[number];
+    const unit = number % 10;
+    const ten = number - unit;
+    return unit === 0 ? tens[ten] : `${tens[ten]} y ${units[unit]}`;
+  };
+  const underThousand = (number: number): string => {
+    if (number < 100) return underHundred(number);
+    if (number === 100) return hundreds[100];
+    const hundred = Math.floor(number / 100) * 100;
+    const rest = number % 100;
+    const hundredWords = hundred === 100 ? "ciento" : hundreds[hundred];
+    return rest === 0 ? hundredWords : `${hundredWords} ${underHundred(rest)}`;
+  };
+
+  if (value < 1000) return underThousand(value);
+  const thousands = Math.floor(value / 1000);
+  const rest = value % 1000;
+  const thousandWords = thousands === 1 ? "mil" : `${underThousand(thousands)} mil`;
+  return rest === 0 ? thousandWords : `${thousandWords} ${underThousand(rest)}`;
+}
+
+function renderNumberConverterScreen(language: LearningLanguage): HTMLElement {
+  const main = createElement("main", { className: "screen number-converter-screen" });
+  const parsedNumber = parseNumberInput(converterNumberInput);
+  const result = parsedNumber.status === "ready"
+    ? { ...parsedNumber, words: convertNumberToWords(parsedNumber.value, language) }
+    : parsedNumber;
+
+  const panel = createElement("section", {
+    className: "panel number-converter-panel",
+    attributes: { "aria-label": "Number converter" },
+  });
+
+  const intro = createElement("div", { className: "converter-intro" });
+  intro.append(
+    createElement("p", { className: "eyebrow", text: "Number converter" }),
+    createElement("h1", { text: "Digits to words" }),
+    createElement("p", {
+      className: "converter-copy",
+      text: `Convert whole numbers into ${language.label} words, then listen or add the result to your practice lines.`,
+    }),
+  );
+
+  const form = createElement("form", { className: "number-converter-form" });
+  const label = createElement("label", { className: "field-label", text: "Whole number" });
+  const input = createElement("input", {
+    className: "number-converter-input",
+    attributes: {
+      type: "text",
+      inputmode: "numeric",
+      pattern: "-?[0-9,]*",
+      value: converterNumberInput,
+      placeholder: "42",
+      "aria-describedby": "number-converter-help",
+    },
+  });
+  input.addEventListener("input", () => {
+    converterNumberInput = input.value;
+  });
+  label.append(input);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    converterNumberInput = input.value;
+    render();
+  });
+
+  const help = createElement("p", {
+    className: "converter-help",
+    text: `Supported range: ${NUMBER_CONVERTER_MIN.toLocaleString()} to ${NUMBER_CONVERTER_MAX.toLocaleString()}.`,
+    attributes: { id: "number-converter-help" },
+  });
+  const convertButton = createElement("button", {
+    className: "primary-button compact-button",
+    text: "Convert",
+  });
+  convertButton.type = "submit";
+  form.append(label, help, convertButton);
+
+  const output = createElement("section", {
+    className: `number-output ${result.status}`,
+    attributes: { "aria-live": "polite" },
+  });
+
+  if (result.status === "ready") {
+    const converterId = getNumberConverterId(language, result.value);
+    output.append(
+      createElement("span", { className: "analysis-label", text: language.label }),
+      createElement("p", { text: result.words }),
+    );
+
+    const actions = createElement("div", { className: "converter-actions" });
+    const speakButton = createElement("button", {
+      className: `primary-button compact-button ${speechState.speakingId === converterId ? "active" : ""}`,
+      text: speechState.speakingId === converterId ? "Speaking" : "Speak",
+    });
+    speakButton.type = "button";
+    speakButton.addEventListener("click", () => speakText(result.words, converterId, language));
+
+    const addButton = createElement("button", {
+      className: "secondary-button compact-button",
+      text: "Add as line",
+    });
+    addButton.type = "button";
+    addButton.addEventListener("click", () => appendLine(result.words));
+    actions.append(speakButton, addButton);
+    output.append(actions);
+  } else {
+    output.append(
+      createElement("span", { className: "analysis-label", text: result.status === "empty" ? "Ready" : "Check input" }),
+      createElement("p", { text: result.message }),
+    );
+  }
+
+  panel.append(intro, form, output);
+  main.append(panel);
+  return main;
+}
+
 function renderCheatSheetScreen(language: LearningLanguage): HTMLElement {
   const main = createElement("main", { className: "screen cheat-sheet-screen" });
 
@@ -1748,6 +2091,7 @@ function renderGlobalControls(): HTMLElement {
     actionRow.append(
       homeButton,
       renderCheatSheetNavButton(),
+      renderNumbersNavButton(),
       shareButton,
       helpButton,
       renderSettingsNavButton(),
@@ -1925,6 +2269,8 @@ function render(): void {
       ? renderSettingsScreen(language)
       : screen === "cheat-sheet"
         ? renderCheatSheetScreen(language)
+      : screen === "numbers"
+        ? renderNumberConverterScreen(language)
       : screen === "help"
         ? renderHelpScreen()
       : screen === "qr"

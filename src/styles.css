@@ -881,3 +881,78 @@ h2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+.number-converter-screen {
+  min-height: auto;
+}
+.number-converter-panel {
+  gap: 18px;
+}
+.converter-intro {
+  display: grid;
+  gap: 6px;
+}
+.converter-intro .eyebrow {
+  color: var(--accent-strong);
+}
+.converter-intro h1 {
+  margin-bottom: 0;
+  color: var(--text);
+  font-size: clamp(2rem, 8vw, 3.2rem);
+}
+.converter-copy,
+.converter-help {
+  margin-bottom: 0;
+  color: var(--muted);
+  font-weight: 700;
+}
+.number-converter-form {
+  display: grid;
+  gap: 8px;
+}
+.number-converter-input {
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel-solid);
+  color: var(--text);
+  font-size: clamp(1.8rem, 9vw, 3.2rem);
+  font-weight: 900;
+  outline: none;
+}
+.number-converter-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px rgba(49, 92, 253, 0.16);
+}
+.number-output {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-solid));
+}
+.number-output.error {
+  background: #fff0f3;
+  color: #8b1e34;
+}
+[data-theme="dark"] .number-output.error {
+  background: color-mix(in srgb, #8b1e34 42%, var(--panel-solid));
+  color: var(--text);
+}
+.number-output p {
+  margin-bottom: 0;
+  color: var(--text);
+  font-size: clamp(1.15rem, 4vw, 1.8rem);
+  font-weight: 900;
+}
+.converter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.converter-actions .active {
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  background: var(--accent);
+  color: white;
+}
