@@ -941,10 +941,13 @@ h2 {
   color: var(--text);
 }
 .number-output p {
+  min-width: 0;
   margin-bottom: 0;
   color: var(--text);
   font-size: clamp(1.15rem, 4vw, 1.8rem);
   font-weight: 900;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 .converter-actions {
   display: flex;
