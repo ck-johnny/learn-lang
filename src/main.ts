@@ -89,15 +89,6 @@ const LETTER_REPEAT_RATE = 0.08;
 const CHROME_TRANSLATION_TIMEOUT_MS = 8000;
 const GOOGLE_TRANSLATION_TIMEOUT_MS = 12000;
 const APP_BASE_PATH = new URL(".", import.meta.url).pathname;
-const SCREEN_ROUTES: Record<AppScreen, string> = {
-  input: "/",
-  reading: "/",
-  settings: "/pages/settings",
-  "cheat-sheet": "/pages/cheat",
-  numbers: "/pages/numbers",
-  help: "/pages/help",
-  qr: "/pages/qr",
-};
 const SCREEN_BREADCRUMB_LABELS: Record<AppScreen, string> = {
   input: "Learn Lang",
   reading: "Learn Lang",
@@ -300,7 +291,7 @@ function applyTheme(): void {
 }
 
 function getShareUrl(): string {
-  const shareUrl = new URL(window.location.href);
+  const shareUrl = new URL(window.location.origin + APP_BASE_PATH);
   shareUrl.searchParams.set("text", settings.paragraph);
   shareUrl.searchParams.set("lang", settings.languageId);
   return shareUrl.toString();
@@ -350,9 +341,32 @@ function screenFromPath(pathname: string): AppScreen {
   return "input";
 }
 
-function pathForScreen(nextScreen: AppScreen): URL {
-  const routePath = SCREEN_ROUTES[nextScreen] ?? "/";
-  return new URL(routePath.replace(/^\//, ""), window.location.origin + APP_BASE_PATH);
+function screenFromStoredLocation(storedLocation: string): AppScreen {
+  if (storedLocation === "reading") {
+    return "reading";
+  }
+
+  if (storedLocation === "settings") {
+    return "settings";
+  }
+
+  if (storedLocation === "cheat-sheet") {
+    return "cheat-sheet";
+  }
+
+  if (storedLocation === "numbers") {
+    return "numbers";
+  }
+
+  if (storedLocation === "help") {
+    return "help";
+  }
+
+  if (storedLocation === "qr") {
+    return "qr";
+  }
+
+  return screenFromPath(storedLocation);
 }
 
 function getInitialScreen(): AppScreen {
@@ -362,33 +376,16 @@ function getInitialScreen(): AppScreen {
     return screenFromPath(currentPath);
   }
 
-  return screenFromPath(settings.lastPath);
+  return screenFromStoredLocation(settings.lastPath);
 }
 
 function persistLastPath(nextScreen: AppScreen): void {
-  const nextLastPath = SCREEN_ROUTES[nextScreen] ?? "/";
-
-  if (settings.lastPath === nextLastPath) {
+  if (settings.lastPath === nextScreen) {
     return;
   }
 
-  settings = { ...settings, lastPath: nextLastPath };
+  settings = { ...settings, lastPath: nextScreen };
   saveSettings(settings);
-}
-
-function syncBrowserPath(nextScreen: AppScreen, mode: "push" | "replace"): void {
-  const nextUrl = pathForScreen(nextScreen);
-  nextUrl.search = window.location.search;
-
-  if (nextUrl.pathname === window.location.pathname && nextUrl.search === window.location.search) {
-    return;
-  }
-
-  window.history[mode === "push" ? "pushState" : "replaceState"](
-    { screen: nextScreen },
-    "",
-    nextUrl,
-  );
 }
 
 function paragraphToLines(paragraph: string): ReadingLine[] {
@@ -1104,12 +1101,11 @@ function renderInputScreen(language: LearningLanguage): HTMLElement {
   return renderSentenceListScreen(language, paragraphToLines(settings.paragraph));
 }
 
-function goToScreen(nextScreen: AppScreen, mode: "push" | "replace" = "push"): void {
+function goToScreen(nextScreen: AppScreen): void {
   stopSpeech();
   screen = nextScreen;
   isTopBarOpen = false;
   persistLastPath(nextScreen);
-  syncBrowserPath(nextScreen, mode);
   render();
 }
 
@@ -1652,14 +1648,27 @@ function renderSettingsScreen(language: LearningLanguage): HTMLElement {
 
 
 type NumberConversionResult =
-  | { status: "ready"; value: number; words: string }
+  | {
+      status: "ready";
+      value: string;
+      integerPart: number;
+      fractionalDigits: string;
+      isNegative: boolean;
+      words: string;
+    }
   | { status: "empty"; message: string }
   | { status: "error"; message: string };
 
-const NUMBER_CONVERTER_MIN = -999_999;
-const NUMBER_CONVERTER_MAX = 999_999;
+const NUMBER_CONVERTER_MIN = -999_999_999_999_999;
+const NUMBER_CONVERTER_MAX = 999_999_999_999_999;
+const MAX_FRACTION_DIGITS = 18;
 
-function getNumberConverterId(language: LearningLanguage, value: number): string {
+type NumberScale = {
+  singular: string;
+  plural: string;
+};
+
+function getNumberConverterId(language: LearningLanguage, value: string): string {
   return `number-converter-${language.id}-${value}`;
 }
 
@@ -1671,35 +1680,73 @@ function parseNumberInput(input: string): NumberConversionResult {
   const normalizedInput = normalizeNumberInput(input);
 
   if (!normalizedInput) {
-    return { status: "empty", message: "Enter a whole number to convert." };
+    return { status: "empty", message: "Enter a number to convert." };
   }
 
-  if (!/^-?\d+$/.test(normalizedInput)) {
-    return { status: "error", message: "Use digits only, with an optional minus sign." };
+  if (!/^-?(?:\d+|\d*\.\d+)$/.test(normalizedInput)) {
+    return {
+      status: "error",
+      message: "Use digits with an optional minus sign and decimal point.",
+    };
   }
 
-  const value = Number(normalizedInput);
-  if (!Number.isSafeInteger(value)) {
+  const isNegative = normalizedInput.startsWith("-");
+  const unsignedInput = isNegative ? normalizedInput.slice(1) : normalizedInput;
+  const [rawIntegerPart = "", rawFractionalDigits = ""] = unsignedInput.split(".");
+  const integerDigits = (rawIntegerPart || "0").replace(/^0+(?=\d)/, "");
+  const fractionalDigits = rawFractionalDigits;
+
+  if (rawFractionalDigits.length > MAX_FRACTION_DIGITS) {
+    return {
+      status: "error",
+      message: `Use ${MAX_FRACTION_DIGITS} or fewer digits after the decimal point.`,
+    };
+  }
+
+  const integerPart = Number(integerDigits);
+  if (!Number.isSafeInteger(integerPart)) {
     return { status: "error", message: "That number is too large to convert safely." };
   }
 
-  if (value < NUMBER_CONVERTER_MIN || value > NUMBER_CONVERTER_MAX) {
+  if (integerPart > NUMBER_CONVERTER_MAX) {
     return {
       status: "error",
       message: `Choose a number from ${NUMBER_CONVERTER_MIN.toLocaleString()} to ${NUMBER_CONVERTER_MAX.toLocaleString()}.`,
     };
   }
 
-  return { status: "ready", value, words: "" };
+  const displayValue = `${isNegative ? "-" : ""}${integerDigits}${fractionalDigits ? `.${fractionalDigits}` : ""}`;
+  return {
+    status: "ready",
+    value: displayValue,
+    integerPart,
+    fractionalDigits,
+    isNegative,
+    words: "",
+  };
 }
 
-function convertNumberToWords(value: number, language: LearningLanguage): string {
-  if (value < 0) {
-    const positiveWords = convertNumberToWords(Math.abs(value), language);
-    const minusWord = language.id === "de" ? "minus" : language.id === "fr" ? "moins" : "minus";
-    return `${minusWord} ${positiveWords}`;
-  }
+function convertNumberToWords(
+  integerPart: number,
+  fractionalDigits: string,
+  isNegative: boolean,
+  language: LearningLanguage,
+): string {
+  const integerWords = convertIntegerToWords(integerPart, language);
+  const decimalWords = fractionalDigits
+    ? `${getDecimalSeparatorWord(language)} ${fractionalDigits
+        .split("")
+        .map((digit) => convertIntegerToWords(Number(digit), language))
+        .join(" ")}`
+    : "";
+  const signWord = isNegative && (integerPart > 0 || fractionalDigits)
+    ? `${language.id === "fr" ? "moins" : "minus"} `
+    : "";
 
+  return `${signWord}${integerWords}${decimalWords ? ` ${decimalWords}` : ""}`;
+}
+
+function convertIntegerToWords(value: number, language: LearningLanguage): string {
   if (language.id === "de") {
     return numberToGerman(value);
   }
@@ -1713,6 +1760,69 @@ function convertNumberToWords(value: number, language: LearningLanguage): string
   }
 
   return numberToEnglish(value);
+}
+
+function getDecimalSeparatorWord(language: LearningLanguage): string {
+  if (language.id === "de") return "Komma";
+  if (language.id === "fr") return "virgule";
+  if (language.id === "es") return "coma";
+  return "point";
+}
+
+function splitNumberChunks(value: number): number[] {
+  const chunks: number[] = [];
+  let remaining = value;
+
+  do {
+    chunks.unshift(remaining % 1000);
+    remaining = Math.floor(remaining / 1000);
+  } while (remaining > 0);
+
+  return chunks;
+}
+
+function joinScaledChunks(
+  value: number,
+  underThousand: (value: number) => string,
+  scales: NumberScale[],
+  options: {
+    separator: string;
+    omitOneBeforeFirstScale?: boolean;
+    pluralizeScale?: (chunk: number, scale: NumberScale) => string;
+  },
+): string {
+  if (value < 1000) {
+    return underThousand(value);
+  }
+
+  const chunks = splitNumberChunks(value);
+  const highestScaleIndex = chunks.length - 2;
+
+  return chunks
+    .map((chunk, chunkIndex) => {
+      if (chunk === 0) {
+        return "";
+      }
+
+      const scaleIndex = highestScaleIndex - chunkIndex;
+      if (scaleIndex < 0) {
+        return underThousand(chunk);
+      }
+
+      const scale = scales[scaleIndex];
+      const scaleWord = options.pluralizeScale
+        ? options.pluralizeScale(chunk, scale)
+        : chunk === 1
+          ? scale.singular
+          : scale.plural;
+      const chunkWords = options.omitOneBeforeFirstScale && chunk === 1 && scaleIndex === 0
+        ? ""
+        : underThousand(chunk);
+
+      return `${chunkWords}${chunkWords ? options.separator : ""}${scaleWord}`;
+    })
+    .filter(Boolean)
+    .join(options.separator);
 }
 
 function numberToGerman(value: number): string {
@@ -1760,14 +1870,20 @@ function numberToGerman(value: number): string {
     return rest === 0 ? hundredWords : `${hundredWords}${underHundred(rest)}`;
   };
 
-  if (value < 1000) {
-    return underThousand(value);
-  }
-
-  const thousands = Math.floor(value / 1000);
-  const rest = value % 1000;
-  const thousandWords = `${thousands === 1 ? "ein" : underThousand(thousands)}tausend`;
-  return rest === 0 ? thousandWords : `${thousandWords}${underThousand(rest)}`;
+  return joinScaledChunks(
+    value,
+    underThousand,
+    [
+      { singular: "tausend", plural: "tausend" },
+      { singular: "Million", plural: "Millionen" },
+      { singular: "Milliarde", plural: "Milliarden" },
+      { singular: "Billion", plural: "Billionen" },
+    ],
+    {
+      separator: " ",
+      omitOneBeforeFirstScale: true,
+    },
+  );
 }
 
 function numberToEnglish(value: number): string {
@@ -1787,11 +1903,17 @@ function numberToEnglish(value: number): string {
     return rest === 0 ? hundredWords : `${hundredWords} ${underHundred(rest)}`;
   };
 
-  if (value < 1000) return underThousand(value);
-  const thousands = Math.floor(value / 1000);
-  const rest = value % 1000;
-  const thousandWords = `${underThousand(thousands)} thousand`;
-  return rest === 0 ? thousandWords : `${thousandWords} ${underThousand(rest)}`;
+  return joinScaledChunks(
+    value,
+    underThousand,
+    [
+      { singular: "thousand", plural: "thousand" },
+      { singular: "million", plural: "million" },
+      { singular: "billion", plural: "billion" },
+      { singular: "trillion", plural: "trillion" },
+    ],
+    { separator: " " },
+  );
 }
 
 function numberToFrench(value: number): string {
@@ -1822,11 +1944,20 @@ function numberToFrench(value: number): string {
     return rest === 0 ? hundredWords : `${hundredWords} ${underHundred(rest)}`;
   };
 
-  if (value < 1000) return underThousand(value);
-  const thousands = Math.floor(value / 1000);
-  const rest = value % 1000;
-  const thousandWords = thousands === 1 ? "mille" : `${underThousand(thousands)} mille`;
-  return rest === 0 ? thousandWords : `${thousandWords} ${underThousand(rest)}`;
+  return joinScaledChunks(
+    value,
+    underThousand,
+    [
+      { singular: "mille", plural: "mille" },
+      { singular: "million", plural: "millions" },
+      { singular: "milliard", plural: "milliards" },
+      { singular: "billion", plural: "billions" },
+    ],
+    {
+      separator: " ",
+      omitOneBeforeFirstScale: true,
+    },
+  );
 }
 
 function numberToSpanish(value: number): string {
@@ -1858,18 +1989,36 @@ function numberToSpanish(value: number): string {
     return rest === 0 ? hundredWords : `${hundredWords} ${underHundred(rest)}`;
   };
 
-  if (value < 1000) return underThousand(value);
-  const thousands = Math.floor(value / 1000);
-  const rest = value % 1000;
-  const thousandWords = thousands === 1 ? "mil" : `${underThousand(thousands)} mil`;
-  return rest === 0 ? thousandWords : `${thousandWords} ${underThousand(rest)}`;
+  return joinScaledChunks(
+    value,
+    underThousand,
+    [
+      { singular: "mil", plural: "mil" },
+      { singular: "millón", plural: "millones" },
+      { singular: "mil millones", plural: "mil millones" },
+      { singular: "billón", plural: "billones" },
+    ],
+    {
+      separator: " ",
+      omitOneBeforeFirstScale: true,
+      pluralizeScale: (chunk, scale) => chunk === 1 ? scale.singular : scale.plural,
+    },
+  );
 }
 
 function renderNumberConverterScreen(language: LearningLanguage): HTMLElement {
   const main = createElement("main", { className: "screen number-converter-screen" });
   const parsedNumber = parseNumberInput(converterNumberInput);
   const result = parsedNumber.status === "ready"
-    ? { ...parsedNumber, words: convertNumberToWords(parsedNumber.value, language) }
+    ? {
+        ...parsedNumber,
+        words: convertNumberToWords(
+          parsedNumber.integerPart,
+          parsedNumber.fractionalDigits,
+          parsedNumber.isNegative,
+          language,
+        ),
+      }
     : parsedNumber;
 
   const panel = createElement("section", {
@@ -1883,18 +2032,18 @@ function renderNumberConverterScreen(language: LearningLanguage): HTMLElement {
     createElement("h1", { text: "Digits to words" }),
     createElement("p", {
       className: "converter-copy",
-      text: `Convert whole numbers into ${language.label} words, then listen or add the result to your practice lines.`,
+      text: `Convert large integers and decimals into ${language.label} words, then listen or add the result to your practice lines.`,
     }),
   );
 
   const form = createElement("form", { className: "number-converter-form" });
-  const label = createElement("label", { className: "field-label", text: "Whole number" });
+  const label = createElement("label", { className: "field-label", text: "Number" });
   const input = createElement("input", {
     className: "number-converter-input",
     attributes: {
       type: "text",
-      inputmode: "numeric",
-      pattern: "-?[0-9,]*",
+      inputmode: "decimal",
+      pattern: "-?[0-9,]*(\\.[0-9]*)?",
       value: converterNumberInput,
       placeholder: "42",
       "aria-describedby": "number-converter-help",
@@ -1912,7 +2061,7 @@ function renderNumberConverterScreen(language: LearningLanguage): HTMLElement {
 
   const help = createElement("p", {
     className: "converter-help",
-    text: `Supported range: ${NUMBER_CONVERTER_MIN.toLocaleString()} to ${NUMBER_CONVERTER_MAX.toLocaleString()}.`,
+    text: `Supported range: ${NUMBER_CONVERTER_MIN.toLocaleString()} to ${NUMBER_CONVERTER_MAX.toLocaleString()}, with up to ${MAX_FRACTION_DIGITS} decimal digits.`,
     attributes: { id: "number-converter-help" },
   });
   const convertButton = createElement("button", {
@@ -2315,7 +2464,7 @@ if ("serviceWorker" in navigator && !isLocalDevHost) {
 
 window.addEventListener("popstate", () => {
   stopSpeech();
-  screen = screenFromPath(window.location.pathname);
+  screen = getInitialScreen();
   isTopBarOpen = false;
   persistLastPath(screen);
   render();
@@ -2324,5 +2473,4 @@ window.addEventListener("popstate", () => {
 applyTheme();
 applySharedSettingsFromUrl();
 persistLastPath(screen);
-syncBrowserPath(screen, "replace");
 render();
